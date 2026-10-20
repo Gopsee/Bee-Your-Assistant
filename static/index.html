@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bee Assistant</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<style>
+  :root {
+    --bg: #faf8f3;
+    --surface: #ffffff;
+    --surface-2: #f3efe6;
+    --border: #e6e0d2;
+    --text: #1f1d18;
+    --muted: #6f6a5e;
+    --accent: #d99a0b;
+    --accent-strong: #b37d00;
+    --accent-soft: #fdf1d3;
+    --user-bg: #2a2722;
+    --user-text: #fbf8f1;
+    --ok: #2f8a4c;
+    --warn: #b9590f;
+    --err: #b3261e;
+    --shadow: 0 1px 2px rgba(40, 30, 10, .06), 0 4px 16px rgba(40, 30, 10, .05);
+    --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #15140f; --surface: #1e1c17; --surface-2: #27241d; --border: #36322a;
+      --text: #f0ece2; --muted: #a39d8e; --accent: #f2b52a; --accent-strong: #f6c552;
+      --accent-soft: #3a2f12; --user-bg: #f0ece2; --user-text: #1a1814;
+      --ok: #5cc27d; --warn: #ef9a4a; --err: #f07a72;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #15140f; --surface: #1e1c17; --surface-2: #27241d; --border: #36322a;
+    --text: #f0ece2; --muted: #a39d8e; --accent: #f2b52a; --accent-strong: #f6c552;
+    --accent-soft: #3a2f12; --user-bg: #f0ece2; --user-text: #1a1814;
+    --ok: #5cc27d; --warn: #ef9a4a; --err: #f07a72;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  button { font: inherit; cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  .logo { font-size: 22px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ready { background: var(--ok); }
+  .dot.loading, .dot.busy { background: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.error { background: var(--err); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .spacer { flex: 1; }
+  .btn {
+    border: 1px solid var(--border); background: var(--surface); color: var(--text);
+    padding: 7px 12px; border-radius: 9px; font-size: 13.5px;
+  }
+  .btn:hover:not(:disabled) { background: var(--surface-2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1405; font-weight: 600; }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-strong); }
+  .icon-btn { border: none; background: none; color: var(--muted); padding: 6px; border-radius: 8px; font-size: 16px; }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  #toggle-side { display: none; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #messages { flex: 1; overflow-y: auto; padding: 24px 20px 12px; }
+  .inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+
+  .msg { display: flex; flex-direction: column; max-width: 85%; }
+  .msg.user { align-self: flex-end; align-items: flex-end; }
+  .bubble { padding: 10px 14px; border-radius: var(--radius); overflow-wrap: anywhere; }
+  .user .bubble { background: var(--user-bg); color: var(--user-text); border-bottom-right-radius: 4px; white-space: pre-wrap; }
+  .assistant .bubble { background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 4px; box-shadow: var(--shadow); }
+  .assistant .bubble p { margin: 0 0 .6em; } .assistant .bubble p:last-child { margin: 0; }
+  .assistant .bubble ul, .assistant .bubble ol { margin: .2em 0 .6em; padding-left: 1.3em; }
+  .assistant .bubble code { font-family: var(--mono); font-size: .9em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+  .offtopic .bubble { background: transparent; border-style: dashed; color: var(--muted); box-shadow: none; font-style: italic; }
+  .error .bubble { border-color: var(--err); color: var(--err); }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--muted); align-items: center; }
+  .chip { border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; font-family: var(--mono); font-size: 11.5px; }
+  .chip.declined, .chip.error { color: var(--warn); border-color: var(--warn); }
+  .chip.recalled { color: var(--accent-strong); border-color: var(--accent); background: var(--accent-soft); }
+
+  .typing { display: inline-flex; gap: 4px; padding: 4px 2px; }
+  .typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: bounce 1s infinite; }
+  .typing span:nth-child(2) { animation-delay: .15s; } .typing span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: none; opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+  .confirm { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 12px 14px; max-width: 85%; }
+  .confirm h3 { margin: 0 0 6px; font-size: 14px; }
+  .confirm pre { margin: 0 0 10px; font: 12px/1.45 var(--mono); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; overflow-x: auto; max-height: 240px; }
+  .confirm .actions { display: flex; gap: 8px; }
+
+  .empty { text-align: center; color: var(--muted); margin: 8vh auto 0; max-width: 460px; }
+  .empty .big { font-size: 42px; }
+  .empty h2 { color: var(--text); font-size: 20px; margin: 8px 0 4px; }
+  .suggestions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+  .suggestions button { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 12px; font-size: 13.5px; }
+  .suggestions button:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+  .composer { padding: 12px 20px 18px; }
+  .composer form {
+    max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 8px 8px 8px 14px; box-shadow: var(--shadow);
+  }
+  .composer form:focus-within { border-color: var(--accent); }
+  textarea {
+    flex: 1; resize: none; border: none; outline: none; background: transparent; color: var(--text);
+    font: inherit; max-height: 160px; padding: 6px 0; min-height: 24px;
+  }
+  .hint { max-width: 760px; margin: 6px auto 0; font-size: 12px; color: var(--muted); text-align: center; }
+  .banner { max-width: 760px; margin: 0 auto 10px; border: 1px solid var(--err); color: var(--err); border-radius: 10px; padding: 8px 12px; font-size: 13.5px; display: flex; gap: 10px; align-items: center; }
+  .banner code { font-family: var(--mono); font-size: 12px; }
+
+  aside {
+    width: 330px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--surface);
+    overflow-y: auto; padding: 18px;
+  }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 10px; font-weight: 650; }
+  aside section + section { margin-top: 24px; }
+  .group { margin-bottom: 14px; }
+  .group h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; }
+  .group h4 .n { color: var(--muted); font-weight: 400; }
+  .group ul { list-style: none; margin: 0; padding: 0; }
+  .group li { font-size: 13.5px; padding: 5px 8px; border-radius: 7px; background: var(--surface-2); margin-bottom: 4px; }
+  .group li .k { color: var(--muted); }
+  .group li .rep { display: block; font-size: 12px; color: var(--muted); text-decoration: line-through; }
+  .none { font-size: 13px; color: var(--muted); font-style: italic; }
+  .small { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+  @media (max-width: 860px) {
+    #toggle-side { display: inline-block; }
+    aside { position: fixed; top: 0; right: 0; bottom: 0; width: min(340px, 88vw); z-index: 20; transform: translateX(100%); transition: transform .2s; box-shadow: var(--shadow); }
+    aside.open { transform: none; }
+    header { padding: 10px 16px; }
+    #messages, .composer { padding-left: 16px; padding-right: 16px; }
+    .msg, .confirm { max-width: 94%; }
+    .status .label { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">🐝</span>
+  <h1>Bee Assistant</h1>
+  <span class="status"><span id="dot" class="dot"></span><span id="status-label" class="label">Connecting…</span></span>
+  <span class="spacer"></span>
+  <button id="end" class="btn" title="Save this session into long-term memory and start a new one">Save &amp; new session</button>
+  <button id="theme" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  <button id="toggle-side" class="icon-btn" title="Memory" aria-label="Show memory">☰</button>
+</header>
+
+<main>
+  <div class="chat">
+    <div id="messages"><div class="inner" id="list">
+      <div class="empty" id="empty">
+        <div class="big">🐝</div>
+        <h2>Ask about your day</h2>
+        <div>Your assistant reads your Bee wearable data and remembers what you tell it across sessions.</div>
+        <div class="suggestions">
+          <button>Highlights of my day</button>
+          <button>Any to-dos from today?</button>
+          <button>What health data do I have today?</button>
+          <button>What did I watch or listen to today?</button>
+        </div>
+      </div>
+    </div></div>
+    <div class="composer">
+      <div id="banner" class="banner" hidden></div>
+      <form id="form">
+        <textarea id="input" rows="1" placeholder="Message Bee…" autocomplete="off"></textarea>
+        <button id="send" class="btn primary" type="submit">Send</button>
+      </form>
+      <div class="hint">Enter to send · Shift+Enter for a new line · Write actions always ask first</div>
+    </div>
+  </div>
+
+  <aside id="side">
+    <section>
+      <h2>Long-term memory</h2>
+      <div id="ltm"><div class="none">Loading…</div></div>
+      <div class="small" id="ltm-updated"></div>
+    </section>
+    <section>
+      <h2>This session</h2>
+      <div id="sess"></div>
+    </section>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const list = $("list"), scroller = $("messages"), input = $("input"), send = $("send");
+let state = null, busy = false;
+
+// ---- theme --------------------------------------------------------------
+try { const t = localStorage.getItem("bee-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+$("theme").onclick = () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("bee-theme", next); } catch {}
+};
+$("toggle-side").onclick = () => $("side").classList.toggle("open");
+document.addEventListener("click", (e) => {
+  const side = $("side");
+  if (side.classList.contains("open") && !side.contains(e.target) && e.target.id !== "toggle-side") side.classList.remove("open");
+});
+
+// ---- rendering helpers ----------------------------------------------------
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+}
+
+// Small markdown subset: paragraphs, bullet and numbered lists, bold, code.
+function md(text) {
+  const out = []; let listType = null;
+  const close = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const ul = line.match(/^[-*•]\s+(.*)/), ol = line.match(/^\d+[.)]\s+(.*)/);
+    if (ul || ol) {
+      const t = ul ? "ul" : "ol";
+      if (listType !== t) { close(); out.push(`<${t}>`); listType = t; }
+      out.push(`<li>${inline((ul || ol)[1])}</li>`);
+    } else if (!line) { close(); }
+    else { close(); out.push(`<p>${inline(line.replace(/^#+\s*/, ""))}</p>`); }
+  }
+  close();
+  return out.join("");
+}
+
+function scrollDown() { scroller.scrollTop = scroller.scrollHeight; }
+
+function addMessage(role, html, cls = "") {
+  $("empty")?.remove();
+  const el = document.createElement("div");
+  el.className = `msg ${role} ${cls}`;
+  el.innerHTML = `<div class="bubble">${html}</div><div class="meta"></div>`;
+  list.appendChild(el); scrollDown();
+  return el;
+}
+
+function setMeta(el, job) {
+  const recalled = (job.recalled || []).map((r) =>
+    `<span class="chip recalled" title="Preloaded by the topic screen, P = ${r.p}">recalled · ${esc(r.topic)}</span>`);
+  const parts = recalled.concat((job.tools || []).map((t) =>
+    `<span class="chip ${t.status !== "success" ? esc(t.status) : ""}" title="${esc(t.status)}">${esc(t.name)}${t.status === "declined" ? " · declined" : ""}</span>`));
+  if (job.tokens && job.tokens.input != null) parts.push(`<span>${job.tokens.input.toLocaleString()} in · ${job.tokens.output} out</span>`);
+  el.querySelector(".meta").innerHTML = parts.join("");
+}
+
+// ---- jobs ----------------------------------------------------------------
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function follow(jobId, el) {
+  let confirmEl = null;
+  while (true) {
+    await sleep(500);
+    let job;
+    try { job = await api(`/api/jobs/${jobId}`); } catch { continue; }
+    if (el) setMeta(el, job);
+    if (job.status === "confirm" && !confirmEl) {
+      confirmEl = showConfirm(jobId, job.pending);
+    } else if (job.status !== "confirm" && confirmEl) {
+      confirmEl.remove(); confirmEl = null;
+    }
+    if (job.status === "done" || job.status === "error") return job;
+  }
+}
+
+function showConfirm(jobId, pending) {
+  const el = document.createElement("div");
+  el.className = "confirm";
+  const name = pending?.tool || "a tool";
+  el.innerHTML = `<h3>⚠️ Bee wants to run <code>${esc(name)}</code></h3>
+    <pre>${esc(JSON.stringify(pending?.args ?? {}, null, 2))}</pre>
+    <div class="actions"><button class="btn primary" data-a="1">Allow</button><button class="btn" data-a="0">Decline</button></div>`;
+  el.querySelectorAll("button").forEach((b) => b.onclick = async () => {
+    el.querySelectorAll("button").forEach((x) => x.disabled = true);
+    try { await api(`/api/jobs/${jobId}/confirm`, { allow: b.dataset.a === "1" }); }
+    catch (e) { el.querySelectorAll("button").forEach((x) => x.disabled = false); }
+  });
+  // place the card just above the typing bubble
+  const typing = list.lastElementChild;
+  list.insertBefore(el, typing); scrollDown();
+  return el;
+}
+
+function setBusy(v) {
+  busy = v;
+  updateControls();
+}
+
+function updateControls() {
+  const ready = state?.status === "ready";
+  send.disabled = busy || !ready || !input.value.trim();
+  $("end").disabled = busy || !ready;
+  input.disabled = !ready;
+  input.placeholder = ready ? "Message Bee…" : state?.status === "error" ? "Assistant unavailable" : "Assistant is loading…";
+}
+
+async function sendMessage(text) {
+  if (busy || !text.trim()) return;
+  addMessage("user", esc(text));
+  input.value = ""; autosize();
+  const el = addMessage("assistant", `<span class="typing"><span></span><span></span><span></span></span>`);
+  setBusy(true);
+  try {
+    const start = await api("/api/chat", { message: text });
+    const job = await follow(start.id, el);
+    const bubble = el.querySelector(".bubble");
+    if (job.status === "error") { el.classList.add("error"); bubble.textContent = job.error; }
+    else if (job.off_topic) { el.classList.add("offtopic"); bubble.innerHTML = `${esc(job.reply)} — this assistant only handles your Bee data and memory.`; }
+    else bubble.innerHTML = md(job.reply || "(no reply)");
+  } catch (e) {
+    el.classList.add("error"); el.querySelector(".bubble").textContent = e.message;
+  } finally {
+    setBusy(false); refresh(); scrollDown(); input.focus();
+  }
+}
+
+$("end").onclick = async () => {
+  if (busy) return;
+  setBusy(true);
+  const btn = $("end"); const label = btn.textContent; btn.textContent = "Saving…";
+  try {
+    const start = await api("/api/session/end", {});
+    const job = await follow(start.id, null);
+    list.innerHTML = "";
+    const el = addMessage("assistant", job.status === "error"
+      ? esc("Session saved, but a new one could not start: " + job.error)
+      : "Session saved to long-term memory. Starting fresh — what would you like to know?");
+    if (job.status === "error") el.classList.add("error");
+  } catch (e) { alertBanner(e.message); }
+  finally { btn.textContent = label; setBusy(false); refresh(); }
+};
+
+// ---- composer ------------------------------------------------------------
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; updateControls(); }
+input.addEventListener("input", autosize);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(input.value); }
+});
+$("form").onsubmit = (e) => { e.preventDefault(); sendMessage(input.value); };
+document.querySelectorAll(".suggestions button").forEach((b) => b.onclick = () => sendMessage(b.textContent));
+
+// ---- state / sidebar -----------------------------------------------------
+function alertBanner(msg, retry = false) {
+  const b = $("banner");
+  if (!msg) { b.hidden = true; return; }
+  b.hidden = false;
+  b.innerHTML = `<span style="flex:1">${esc(msg)}</span>` + (retry ? `<button class="btn" id="retry">Retry</button>` : "");
+  if (retry) $("retry").onclick = async () => { await api("/api/retry", {}); refresh(); };
+}
+
+function group(title, items) {
+  const body = items.length ? `<ul>${items.join("")}</ul>` : `<div class="none">Nothing yet</div>`;
+  return `<div class="group"><h4>${esc(title)}<span class="n">${items.length || ""}</span></h4>${body}</div>`;
+}
+
+function renderSide(s) {
+  const m = s.memory || {};
+  const profile = Object.entries(m.profile || {}).map(([k, v]) => `<li><span class="k">${esc(k)}:</span> ${esc(v)}</li>`);
+  let html = group("Profile", profile);
+  for (const c of ["preferences", "people", "routines", "facts"])
+    html += group(c[0].toUpperCase() + c.slice(1), (m[c] || []).map((x) => `<li>${esc(x)}</li>`));
+  $("ltm").innerHTML = html;
+  $("ltm-updated").textContent = m.updated_at ? `Updated ${new Date(m.updated_at).toLocaleString()}` : "";
+
+  const sess = s.session || {};
+  const notes = (sess.notes || []).map((n) =>
+    `<li><span class="k">${esc(n.category)}:</span> ${esc(n.note)}${n.replaces ? `<span class="rep">${esc(n.replaces)}</span>` : ""}</li>`);
+  const topics = Object.entries(sess.topics || {}).map(([k, v]) => `<li><strong>${esc(k)}</strong><br><span class="k">${esc(v)}</span></li>`);
+  let info = [];
+  if (sess.started_at) info.push(`Started ${new Date(sess.started_at).toLocaleTimeString()} · ${sess.turns} turns`);
+  if (s.log) info.push(`Log: ${s.log}`);
+  $("sess").innerHTML = group("Noted (saved on session end)", notes) + group("Offloaded topics", topics) +
+    `<div class="small">${info.map(esc).join("<br>")}</div>`;
+}
+
+async function refresh() {
+  try {
+    state = await api("/api/state");
+  } catch {
+    state = { status: "error", error: "Can't reach the server. Is server.py running?" };
+  }
+  const st = busy || state.busy ? "busy" : state.status;
+  $("dot").className = "dot " + st;
+  $("status-label").textContent = { ready: "Ready", busy: "Working…", loading: "Loading models…", error: "Unavailable" }[st];
+  if (state.status === "error") alertBanner(state.error, !!state.memory);
+  else alertBanner("");
+  if (state.memory) renderSide(state);
+  updateControls();
+}
+
+refresh();
+setInterval(() => { if (!busy) refresh(); }, 2000);
+</script>
+</body>
+</html>
