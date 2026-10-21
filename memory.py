@@ -488,6 +488,13 @@ Every exchange number from 1 to {len(exchanges)} must appear in exactly one topi
         _write_json(self.persistent_path, {"updated_at": datetime.now().isoformat(timespec="seconds"), **merged.model_dump()})
         self.session_path.unlink(missing_ok=True)
 
+        from memory_graph import build_graph  # imported here: memory_graph imports this module
+        try:
+            if build_graph(self.model, self.persistent_path.parent):
+                print("Rebuilt the long-term memory graph.")
+        except Exception as exc:  # the graph is only an index; memory itself is saved
+            print(f"(memory graph rebuild failed: {exc})")
+
     def _extract_update(self, current: Memory, said: list[str]) -> MemoryUpdate:
         listing = "\n".join(f"- {t}" for t in said)
         prompt = f"""You maintain long-term memory about a user.

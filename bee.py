@@ -16,21 +16,26 @@ from strands.tools.mcp import MCPClient
 from strands.vended_tools import file_editor, shell
 
 from memory import MEMORY_DIR, MemoryStore, TopicOffloadManager
+from memory_graph import lookup_tool
 from steering import BeeSteering, states_fact
 from topic_screen import NOT_RELATED, THRESHOLD, TopicScreen
 
 from strands.models import BedrockModel
 from strands.models.ollama import OllamaModel
 
-model = OllamaModel(
-    host="http://localhost:11434",
-    model_id="llama3.1",
-    temperature=0,
-    options={"num_ctx": 32768},  # default context is too small for tool schemas + results
-)
+# model = OllamaModel(
+#     host="http://localhost:11434",
+#     model_id="llama3.1",
+#     temperature=0,
+#     options={"num_ctx": 32768},  # default context is too small for tool schemas + results
+# )
+
+# bedrock_model = BedrockModel(
+#         model_id="apac.amazon.nova-micro-v1:0",
+#     )
 
 bedrock_model = BedrockModel(
-        model_id="apac.amazon.nova-micro-v1:0",
+        model_id="global.amazon.nova-2-lite-v1:0",
     )
 
 # Claude needs the Anthropic use-case form submitted in the Bedrock console first
@@ -58,6 +63,7 @@ When the user tells you a lasting fact about themselves (name, preferences, peop
 routines), call the remember tool to save it. If they correct something in your
 long-term memory, call remember with replaces set to the old fact, copied exactly. If the user refers to something from
 earlier that is listed as an offloaded topic, call the recall tool for the details.
+For how people, places or things in long-term memory connect, call lookup_memory.
 Be concise and actionable."""
 
 class CoerceToolArgs(HookProvider):
@@ -196,7 +202,8 @@ class BeeSession:
         self.confirm_writes = ConfirmWrites(confirm)
         self.agent = Agent(
             model=bedrock_model,
-            tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool()],
+            tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool(),
+                   lookup_tool(memory_dir)],
             system_prompt=BASE_PROMPT,
             messages=self.memory.seed_messages(),
             conversation_manager=TopicOffloadManager(self.memory, max_exchanges=6, keep_exchanges=2),
