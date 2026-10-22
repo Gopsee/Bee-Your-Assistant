@@ -240,7 +240,8 @@ class BeeSession:
             return NOT_RELATED
         self.memory.add_turn("user", user_input)
         self.preload_topics(user_input)
-        self.last_reply = str(self.agent(user_input)).strip()
+        # Nova writes its reasoning inline as <thinking>...</thinking>; keep it out of the reply.
+        self.last_reply = re.sub(r"<thinking>.*?</thinking>", "", str(self.agent(user_input)), flags=re.S).strip()
         self.logger.write("Assistant", self.last_reply)
         self.memory.add_turn("assistant", self.last_reply)
         return self.last_reply

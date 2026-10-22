@@ -6,16 +6,23 @@ BeeSession (bee.py) behind a small JSON API.
     python server.py --port 9000
     python server.py --memory-dir /tmp/scratch-memory --log-dir /tmp/scratch-logs
 
+The mobile page (static/mobile.html, at /mobile) uses the /api/m/... routes:
+Bee account data through the bee CLI (bee_data.py), plus edits to persistent
+and intermediate memory.
+
 The agent is not thread-safe, so every call into the session (start, ask, end)
 runs on one worker thread. A chat message becomes a job the page polls; when a
 write tool needs approval the job waits until the page answers Allow/Decline.
 """
 import argparse
+import shutil
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -24,7 +31,8 @@ from pydantic import BaseModel
 from strands.hooks import AfterModelCallEvent, AfterToolCallEvent, HookProvider, HookRegistry
 
 from bee import LOG_DIR, BeeSession
-from memory import MEMORY_DIR, _read_json
+from bee_data import BeeData, BeeError
+from memory import CATEGORIES, MEMORY_DIR, PROMOTE_AFTER, Memory, _read_json, _write_json, load_intermediate, settle_card
 from topic_screen import NOT_RELATED, TopicScreen
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -80,6 +88,9 @@ class BeeApp:
         self.session: BeeSession | None = None
         self.status = "loading"  # loading | ready | busy | error
         self.error = ""
+        # Guards persistent.json between the mobile page's edits and the
+        # end-of-session merge (which re-reads the file, so edits survive it).
+        self.memory_lock = threading.Lock()
 
     # ---- runs on the worker thread -----------------------------------------
 
@@ -100,7 +111,8 @@ class BeeApp:
             if self.screen is None:
                 print("Loading topic screen (strands-decider)...")
                 self.screen = TopicScreen()
-            self.session = BeeSession(self.screen, self.memory_dir, self.log_dir, confirm=self._confirm)
+            with self.memory_lock:  # start_session merges a session left over from a crash
+                self.session = BeeSession(self.screen, self.memory_dir, self.log_dir, confirm=self._confirm)
             self.session.agent.hooks.add_hook(JobRecorder(self))
             print(f"Logging conversation to {self.session.logger.path}")
             self.status, self.error = "ready", ""
@@ -125,7 +137,8 @@ class BeeApp:
         self.current = job
         try:
             if self.session:
-                self.session.close()
+                with self.memory_lock:
+                    self.session.close()
             self.session = None
             self._start_session()
             job.status = "done" if self.status == "ready" else "error"
@@ -163,8 +176,48 @@ class BeeApp:
             job.answer = "n"
             job.answered.set()
         if self.session:
-            self.worker.submit(self.session.close).result()
+            self.worker.submit(self._close_locked).result()
         self.worker.shutdown()
+
+    def _close_locked(self) -> None:
+        with self.memory_lock:
+            self.session.close()
+
+    def edit_memory(self, edit: "MemoryEditIn") -> dict:
+        """Add, change or delete one persistent-memory entry. Backs up the old file first."""
+        path = self.memory_dir / "persistent.json"
+        with self.memory_lock:
+            data = _read_json(path, {})
+            data.pop("updated_at", None)
+            mem = Memory(**data)
+            if edit.category == "profile":
+                key, value = edit.key.strip(), edit.value.strip()
+                if edit.action != "add" and edit.old not in mem.profile:
+                    raise HTTPException(404, f"No profile entry {edit.old!r}")
+                if edit.action == "delete":
+                    del mem.profile[edit.old]
+                else:
+                    if not key or not value:
+                        raise HTTPException(400, "Profile entries need a name and a value")
+                    if edit.action == "edit" and edit.old != key:
+                        del mem.profile[edit.old]
+                    mem.profile[key] = value
+            else:
+                items, value = getattr(mem, edit.category), edit.value.strip()
+                if edit.action != "add" and edit.old not in items:
+                    raise HTTPException(404, "That entry is no longer in memory")
+                if edit.action != "delete" and not value:
+                    raise HTTPException(400, "Empty entry")
+                if edit.action == "add":
+                    items.append(value)
+                elif edit.action == "edit":
+                    items[items.index(edit.old)] = value
+                else:
+                    items.remove(edit.old)
+            if path.exists():
+                shutil.copy(path, path.with_suffix(".prev.json"))
+            _write_json(path, {"updated_at": datetime.now().isoformat(timespec="seconds"), **mem.model_dump()})
+            return _read_json(path, {})
 
 
 class ChatIn(BaseModel):
@@ -173,6 +226,43 @@ class ChatIn(BaseModel):
 
 class ConfirmIn(BaseModel):
     allow: bool
+
+
+class TodoIn(BaseModel):
+    text: str
+    alarm_at: str | None = None  # ISO 8601
+
+
+class TodoPatch(BaseModel):
+    text: str | None = None
+    completed: bool | None = None
+    alarm_at: str | None = None
+    clear_alarm: bool = False
+
+
+class SuggestionIn(BaseModel):
+    accept: bool
+
+
+class FactIn(BaseModel):
+    text: str
+
+
+class FactPatch(BaseModel):
+    text: str | None = None
+    confirmed: bool | None = None
+
+
+class CardIn(BaseModel):
+    keep: bool  # True: move to persistent memory now; False: forget it
+
+
+class MemoryEditIn(BaseModel):
+    category: Literal[CATEGORIES]
+    action: Literal["add", "edit", "delete"]
+    old: str = ""    # the entry being edited or deleted (the key, for profile)
+    key: str = ""    # profile only
+    value: str = ""
 
 
 def create_app(memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR) -> FastAPI:
@@ -228,6 +318,102 @@ def create_app(memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR) -> FastAP
         if bee.status == "error":
             bee.worker.submit(bee._start_session)
         return {"ok": True}
+
+    # ---- mobile page --------------------------------------------------------
+
+    data = BeeData()
+
+    def call(fn, *args):
+        try:
+            return fn(*args)
+        except BeeError as exc:
+            raise HTTPException(502, f"Bee: {exc}")
+
+    @app.get("/mobile")
+    def mobile():
+        return FileResponse(STATIC_DIR / "mobile.html")
+
+    @app.get("/api/m/highlights")
+    def highlights():
+        return call(data.highlights)
+
+    @app.get("/api/m/conversations")
+    def conversations(cursor: str | None = None):
+        return call(data.conversations, cursor)
+
+    @app.get("/api/m/conversations/{cid}")
+    def conversation(cid: int):
+        return call(data.conversation, cid)
+
+    @app.get("/api/m/todos")
+    def todos():
+        return call(data.todos)
+
+    @app.post("/api/m/todos")
+    def todo_create(body: TodoIn):
+        if not body.text.strip():
+            raise HTTPException(400, "Empty to-do")
+        return call(data.todo_create, body.text.strip(), body.alarm_at)
+
+    @app.patch("/api/m/todos/{tid}")
+    def todo_update(tid: int, body: TodoPatch):
+        return call(data.todo_update, tid, body.text, body.completed, body.alarm_at, body.clear_alarm)
+
+    @app.delete("/api/m/todos/{tid}")
+    def todo_delete(tid: int):
+        return call(data.todo_delete, tid)
+
+    @app.post("/api/m/suggestions/{sid}")
+    def suggestion(sid: int, body: SuggestionIn):
+        return call(data.suggestion, sid, body.accept)
+
+    @app.get("/api/m/profile")
+    def profile():
+        return {"memory": _read_json(memory_dir / "persistent.json", {}), "facts": call(data.facts)}
+
+    @app.post("/api/m/memory")
+    def memory_edit(body: MemoryEditIn):
+        return bee.edit_memory(body)
+
+    @app.get("/api/m/learning")
+    def learning():
+        return {"items": load_intermediate(memory_dir), "promote_after": PROMOTE_AFTER}
+
+    @app.post("/api/m/learning/{card_id}")
+    def learning_settle(card_id: str, body: CardIn):
+        with bee.memory_lock:
+            try:
+                items = settle_card(memory_dir, card_id, body.keep)
+            except KeyError:
+                raise HTTPException(404, "That card is no longer in intermediate memory")
+        return {"items": items, "promote_after": PROMOTE_AFTER}
+
+    @app.post("/api/m/facts")
+    def fact_create(body: FactIn):
+        if not body.text.strip():
+            raise HTTPException(400, "Empty fact")
+        return call(data.fact_create, body.text.strip())
+
+    @app.patch("/api/m/facts/{fid}")
+    def fact_update(fid: int, body: FactPatch):
+        return call(data.fact_update, fid, body.text, body.confirmed)
+
+    @app.delete("/api/m/facts/{fid}")
+    def fact_delete(fid: int):
+        return call(data.fact_delete, fid)
+
+    @app.get("/api/m/search")
+    def search(q: str):
+        q = q.strip()
+        if not q:
+            return {"bee": [], "memory": [], "todos": []}
+        words = q.lower().split()
+        hit = lambda text: all(w in text.lower() for w in words)
+        mem = _read_json(memory_dir / "persistent.json", {})
+        memory = [{"category": "profile", "text": f"{k}: {v}"} for k, v in mem.get("profile", {}).items() if hit(f"{k} {v}")]
+        memory += [{"category": c, "text": x} for c in CATEGORIES[1:] for x in mem.get(c, []) if hit(x)]
+        todos = [t for t in call(data.todos)["todos"] if hit(t.get("text", ""))]
+        return {"bee": call(data.search, q), "memory": memory, "todos": todos}
 
     return app
 

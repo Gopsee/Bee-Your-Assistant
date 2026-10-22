@@ -27,7 +27,7 @@ from pathlib import Path
 from strands import Agent
 
 from bee import BeeSession, bedrock_model
-from memory import MEMORY_DIR
+from memory import MEMORY_DIR, load_intermediate
 from topic_screen import NOT_RELATED, TopicScreen
 
 RUNS_DIR = Path(__file__).parent / "sim_runs"
@@ -188,9 +188,11 @@ class Budget:
 
 
 def memory_text(memory_dir: Path) -> str:
+    """Persistent plus intermediate memory: a fact told once is still being learned."""
     data = json.loads((memory_dir / "persistent.json").read_text(encoding="utf-8"))
     data.pop("updated_at", None)
-    return json.dumps(data, ensure_ascii=False).lower()
+    learning = [c["text"] for c in load_intermediate(memory_dir)]
+    return json.dumps([data, learning], ensure_ascii=False).lower()
 
 
 def _say(bee: BeeSession, message: str, replies: list[str], budget: Budget) -> bool:
