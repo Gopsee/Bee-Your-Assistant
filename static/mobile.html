@@ -6,6 +6,10 @@
 <meta name="theme-color" content="#ffffff">
 <title>Bee Mobile</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<script>
+  // ?embed=1: shown inside the desktop page (index.html), which supplies the menu.
+  if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embed");
+</script>
 <style>
   :root {
     --bg: #fffdf8; --surface: #ffffff; --surface-2: #fff5d6; --border: #f1e3c2;
@@ -246,6 +250,18 @@
   .toast.alarm { background: var(--accent); color: #1a1405; }
   .toast .btn { background: rgba(255,255,255,.85); border: none; color: #1a1405; }
   @keyframes drop { from { transform: translateY(-10px); opacity: 0; } }
+  /* embedded in the desktop page: full width, no phone frame or tab bar */
+  html.embed body { background: var(--bg); display: block; padding: 0; min-height: 0; }
+  html.embed .phone { width: 100vw; height: 100vh; border: none; border-radius: 0; box-shadow: none; }
+  html.embed .phone::before { display: none; }
+  html.embed .topbar { padding: 10px max(16px, calc((100vw - 760px) / 2)) !important; }
+  html.embed .tabbar { display: none; }
+  html.embed .view, html.embed .page .body { padding-left: max(16px, calc((100vw - 760px) / 2)); padding-right: max(16px, calc((100vw - 760px) / 2)); }
+  html.embed .hscroll { margin: 0; padding: 2px 0 8px; }
+  html.embed .hscroll .card, html.embed .flash { flex-basis: 300px; }
+  html.embed .sheet { left: 50%; right: auto; width: min(560px, 100%); transform: translate(-50%, 100%); }
+  html.embed .sheet.open { transform: translate(-50%, 0); }
+  html.embed .toasts { left: auto; width: min(380px, calc(100% - 24px)); top: 64px; }
   .spinner { width: 22px; height: 22px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 30px auto; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
@@ -422,7 +438,11 @@ function page(title, bodyHtml, { actions = "" } = {}) {
 const TITLES = { home: "Highlights", chat: "Chat", convs: "Conversations", todos: "To-dos", profile: "Profile" };
 const loaders = {};
 let tab = "home";
+const EMBED = document.documentElement.classList.contains("embed");
+const tellParent = (msg) => { if (EMBED) parent.postMessage(msg, location.origin); };
 function show(name) {
+  tellParent({ beeTab: name });
+  if (EMBED && name === "chat") return;  // the desktop page has its own chat
   tab = name;
   document.querySelectorAll("#tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
@@ -436,8 +456,14 @@ function show(name) {
     $("reload").onclick = () => loaders[name](true);
     loaders[name]?.();
   }
-  store.set("bee-mobile-tab", name);
+  if (!EMBED) store.set("bee-mobile-tab", name);
 }
+// The desktop page's menu switches tabs here without reloading the frame.
+addEventListener("message", (e) => {
+  if (e.origin !== location.origin) return;
+  if (e.data?.beeTab) show(e.data.beeTab);
+  if (e.data?.beeMemoryChanged) { profileData = null; delete $("view-convs").dataset.loaded; }
+});
 document.querySelectorAll("#tabbar button").forEach((b) => b.onclick = () => show(b.dataset.tab));
 
 // ---- highlights -----------------------------------------------------------------
@@ -632,6 +658,7 @@ async function loadTodos(force) {
 function updateBadge() {
   const due = (todosCache?.todos || []).filter((t) => !t.completed && t.alarm_at && t.alarm_at <= Date.now()).length;
   $("todo-badge").hidden = !due; $("todo-badge").textContent = due;
+  tellParent({ beeBadge: due });
 }
 
 loaders.todos = async (force) => {
@@ -1000,7 +1027,7 @@ async function refreshState() {
 setInterval(() => { if (tab === "chat" && !busy) refreshState(); }, 3000);
 
 // ---- start ------------------------------------------------------------------------------
-show(store.get("bee-mobile-tab", "home"));
+show(EMBED ? new URLSearchParams(location.search).get("tab") || "home" : store.get("bee-mobile-tab", "home"));
 loadTodos().then(checkReminders).catch(() => {});
 </script>
 </body>
