@@ -146,6 +146,31 @@ class BeeApp:
         finally:
             self.current = None
 
+    def _delete_data(self, job: Job) -> None:
+        """Delete every local copy of the user's data and start an empty session.
+        The current session is dropped, not saved, so nothing is merged back.
+        Data in the Bee account is untouched (deleted in the Bee app)."""
+        self.current = job
+        try:
+            if self.session:
+                self.session.logger.close()
+                self.session = None
+            with self.memory_lock:
+                memory_files = [p for p in self.memory_dir.glob("*.json") if p.is_file()]
+                logs = [p for p in self.log_dir.glob("*.log") if p.is_file()]
+                for path in memory_files + logs:
+                    path.unlink()
+            # Finished jobs still hold old replies in server memory.
+            self.jobs = {k: j for k, j in self.jobs.items() if j.status not in ("done", "error")}
+            self._start_session()
+            job.reply = f"Deleted {len(memory_files)} memory files and {len(logs)} conversation logs."
+            job.status = "done" if self.status == "ready" else "error"
+            job.error = self.error
+        except Exception as exc:
+            job.status, job.error = "error", f"{type(exc).__name__}: {exc}"
+        finally:
+            self.current = None
+
     # ---- called from request handlers --------------------------------------
 
     def submit(self, fn, *args) -> Job:
@@ -312,6 +337,11 @@ def create_app(memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR) -> FastAP
     def end_session():
         """Save this session into long-term memory and start a fresh one."""
         return bee.submit(bee._end_session).view()
+
+    @app.post("/api/data/delete")
+    def delete_data():
+        """Delete all local memory and conversation logs (not the Bee account's data)."""
+        return bee.submit(bee._delete_data).view()
 
     @app.post("/api/retry")
     def retry():

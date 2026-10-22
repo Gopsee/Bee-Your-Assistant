@@ -810,6 +810,9 @@ loaders.profile = async (force) => {
       html += items.length ? `<div class="list">${items.map((x) => `<div class="item tap" data-mem="${c}" data-old="${esc(x)}"><div class="txt">${esc(x)}</div></div>`).join("")}</div>`
         : `<div class="list"><div class="none">Nothing yet</div></div>`;
     }
+    html += `<h2 class="sec">Your data</h2><div class="card">
+      <p style="margin:0 0 10px">Delete everything the assistant has stored on this computer: its memory of you, things it is still learning, and all chat logs.</p>
+      <button class="btn danger block" id="delete-data">Delete my data</button></div>`;
   } else {
     const f = profileData.facts;
     const unconfirmed = f.filter((x) => !x.confirmed);
@@ -824,7 +827,37 @@ loaders.profile = async (force) => {
   v.querySelectorAll("[data-mem]").forEach((el) => el.onclick = () => memoryForm(el.dataset.mem, el.dataset.old));
   v.querySelectorAll("[data-fact]").forEach((el) => el.onclick = () => factForm(profileData.facts.find((x) => x.id == el.dataset.fact)));
   v.querySelector("[data-addfact]")?.addEventListener("click", () => factForm());
+  $("delete-data")?.addEventListener("click", deleteMyData);
 };
+
+async function deleteMyData() {
+  const ok = await areYouSure("Delete all your data?",
+    `This permanently deletes, from this computer:<br>• the assistant's memory of you (profile, people, routines…)<br>
+     • facts it is still learning<br>• the current chat and all chat logs<br><br>
+     It can't be undone. Your Bee account (conversations, to-dos, Bee facts) is not changed; delete those in the Bee app.`,
+    "Delete everything", true);
+  if (!ok) return;
+  const t = toast("Deleting your data…", "", [], 0);
+  try {
+    const start = await api("/api/data/delete", {});
+    const job = await follow(start.id, null);
+    if (job.status === "error") throw new Error(job.error);
+    dataDeleted();
+    tellParent({ beeDataDeleted: true });
+    toast(esc(job.reply || "Your data was deleted"));
+  } catch (e) { fail(e); }
+  finally { t.remove(); }
+}
+
+// Forget everything shown from the old data: chat, memory, learning cards.
+function dataDeleted() {
+  msgs.innerHTML = "";
+  addMessage("assistant", "Your data was deleted. Starting fresh.");
+  profileData = null;
+  delete $("view-convs").dataset.loaded;
+  if (tab === "profile") loaders.profile();
+  refreshState();
+}
 
 function factRow(f) {
   const tags = (f.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ");

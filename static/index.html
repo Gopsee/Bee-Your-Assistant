@@ -238,6 +238,11 @@ const memoryChanged = () => { if (frame.src) frame.contentWindow.postMessage({ b
 addEventListener("message", (e) => {
   if (e.origin !== location.origin || e.source !== frame.contentWindow) return;
   if (e.data?.beeTab) setTab(e.data.beeTab, true);
+  if (e.data?.beeDataDeleted) {
+    list.innerHTML = "";
+    addMessage("assistant", "Your data was deleted. Starting fresh.");
+    refresh();
+  }
   if (e.data?.beeBadge !== undefined) { $("todo-badge").hidden = !e.data.beeBadge; $("todo-badge").textContent = e.data.beeBadge; }
 });
 
