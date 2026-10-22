@@ -114,16 +114,30 @@ def _add_item(mem: Memory, category: str, item: str) -> bool:
     return True
 
 
+# Profile details only a caregiver sets; the patient's own statements don't overwrite them.
+CAREGIVER_KEYS = {"caregiver", "emergency contact", "deceased_policy", "condition"}
+_DEATH = re.compile(r"\b(passed away|passed on|died|dead|death|deceased|no longer (with us|alive)|not alive)\b",
+                    re.IGNORECASE)
+
+
+def caregiver_set(item: str) -> bool:
+    """A memory item a caregiver set: a death or an explicit caregiver note."""
+    return bool(_DEATH.search(item)) or "caregiver says" in item.lower()
+
+
 def _apply_notes(mem: Memory, cards: list[dict], notes: list[dict]) -> list[tuple[str, str]]:
     """Apply what the agent saved with the remember tool. A correction of
     something already in persistent memory (``replaces``, or a new value for a
     known profile detail) is explicit, so it applies at once. Everything else
-    is returned as a candidate for intermediate memory."""
+    is returned as a candidate for intermediate memory. Caregiver-set facts are
+    never changed from chat, even if a remember call got past steering."""
     candidates = []
     for n in notes:
         note, category, old = n["note"].strip(), n["category"], (n.get("replaces") or "").strip().lower()
         if category == "profile" and ":" in note:
             key, value = (part.strip() for part in note.split(":", 1))
+            if key.lower() in CAREGIVER_KEYS and key.lower() in mem.profile:
+                continue
             if key and value:
                 if key.lower() in mem.profile:
                     mem.profile[key.lower()] = value
@@ -132,6 +146,8 @@ def _apply_notes(mem: Memory, cards: list[dict], notes: list[dict]) -> list[tupl
             continue
         if category not in CATEGORIES[1:]:
             category = "facts"
+        if old and caregiver_set(old):
+            continue
         if old:
             replaced = False
             for c in CATEGORIES[1:]:

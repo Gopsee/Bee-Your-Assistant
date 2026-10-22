@@ -131,6 +131,8 @@
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1405; font-weight: 600; }
   .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); }
   .btn.danger { color: var(--err); }
+  .btn.alarm { background: #dc2626; border-color: #dc2626; color: #fff; font-weight: 600; }
+  .btn.alarm:hover:not(:disabled) { background: #b91c1c; }
   .btn.sm { padding: 4px 10px; font-size: 12.5px; border-radius: 8px; }
   .btn.block { width: 100%; }
   .link { border: none; background: none; color: var(--accent-strong); padding: 0; font-size: 13px; font-weight: 600; }
@@ -412,12 +414,13 @@ function sheet(html, { onClose } = {}) {
 }
 
 // Every write to the Bee account or memory goes through this.
+// danger: true for a red-text button, "alarm" for a solid bright-red one.
 function areYouSure(title, detail, okLabel = "Yes, do it", danger = false) {
   return new Promise((resolve) => {
     let answer = false;
     const s = sheet(`<h3>${esc(title)}</h3>${detail ? `<p class="muted" style="margin:0">${detail}</p>` : ""}
       <div class="actions"><button class="btn" data-close>Cancel</button>
-      <button class="btn ${danger ? "danger" : "primary"}" id="sure-ok">${esc(okLabel)}</button></div>`,
+      <button class="btn ${danger === "alarm" ? "alarm" : danger ? "danger" : "primary"}" id="sure-ok">${esc(okLabel)}</button></div>`,
       { onClose: () => resolve(answer) });
     s.querySelector("#sure-ok").onclick = () => { answer = true; s.close(); };
   });
@@ -812,7 +815,7 @@ loaders.profile = async (force) => {
     }
     html += `<h2 class="sec">Your data</h2><div class="card">
       <p style="margin:0 0 10px">Delete everything the assistant has stored on this computer: its memory of you, things it is still learning, and all chat logs.</p>
-      <button class="btn danger block" id="delete-data">Delete my data</button></div>`;
+      <button class="btn alarm block" id="delete-data">Delete my data</button></div>`;
   } else {
     const f = profileData.facts;
     const unconfirmed = f.filter((x) => !x.confirmed);
@@ -835,11 +838,11 @@ async function deleteMyData() {
     `This permanently deletes, from this computer:<br>• the assistant's memory of you (profile, people, routines…)<br>
      • facts it is still learning<br>• the current chat and all chat logs<br><br>
      It can't be undone. Your Bee account (conversations, to-dos, Bee facts) is not changed; delete those in the Bee app.`,
-    "Delete everything", true);
+    "Delete everything", "alarm");
   if (!ok) return;
   const t = toast("Deleting your data…", "", [], 0);
   try {
-    const start = await api("/api/data/delete", {});
+    const start = await api("/api/data/delete", { body: {} });
     const job = await follow(start.id, null);
     if (job.status === "error") throw new Error(job.error);
     dataDeleted();
@@ -1030,7 +1033,7 @@ async function endSession() {
   busy = true; updateControls();
   const t = toast("Saving session…", "", [], 0);
   try {
-    const start = await api("/api/session/end", {});
+    const start = await api("/api/session/end", { body: {} });
     const job = await follow(start.id, null);
     msgs.innerHTML = "";
     const el = addMessage("assistant", job.status === "error"

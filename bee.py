@@ -255,7 +255,7 @@ class BeeSession:
             messages=self.memory.seed_messages(),
             conversation_manager=TopicOffloadManager(self.memory, max_exchanges=6, keep_exchanges=2),
             hooks=[CoerceToolArgs(), self.confirm_writes, self.logger, TokenUsagePrinter(self.logger)],
-            plugins=[AgentSkills(skills=["./skills"]), BeeSteering(self.memory, self.logger.write)],
+            plugins=[AgentSkills(skills=["./skills"]), BeeSteering(self.memory, self.logger.write, CAREGIVER, CAREGIVER_PHONE)],
         )
         self.last_reply = ""
         self.last_recalled: list[tuple[str, float]] = []  # (topic, P) preloaded for the last message
