@@ -319,6 +319,25 @@ def _render_exchange(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _as_notes(text: str) -> str:
+    """Rewrite a rendered exchange as notes, not a chat transcript. Small models
+    shown "Assistant: ..." / "Tool call: ..." lines copy that format into their
+    reply, printing a tool call as text instead of making it."""
+    out, skipping = [], False
+    for line in text.splitlines():
+        if line.startswith(("Tool call:", "Tool result:")):
+            skipping = True
+        elif line.startswith("User: "):
+            skipping = False
+            out.append("- I said: " + line[len("User: "):])
+        elif line.startswith("Assistant: "):
+            skipping = False
+            out.append("- You replied: " + line[len("Assistant: "):])
+        elif not skipping:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _structured(model, output_model: type[BaseModel], prompt: str) -> BaseModel:
     """Ask the model for JSON matching ``output_model``.
 
@@ -414,7 +433,7 @@ class MemoryStore:
         the newest exchanges that fit."""
         t = self.session.get("topics", {})[name]
         head = f"Topic: {name}\nSummary: {t['summary']}"
-        exchanges = [e["text"] for e in t["exchanges"]]
+        exchanges = [_as_notes(e["text"]) for e in t["exchanges"]]
         if max_chars is not None:
             kept, size = [], len(head)
             for text in reversed(exchanges):

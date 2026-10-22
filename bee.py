@@ -47,18 +47,72 @@ def bee_mcp() -> MCPClient:
         )
     )
 
-BASE_PROMPT = f"""You are a personal assistant with access to the user's Bee wearable data.
-Today's date is {date.today().isoformat()}. Use YYYY-MM-DD dates when calling tools.
-Use the Bee MCP tools (facts, daily summaries) to answer questions about the user's day.
-Only call a tool when the question needs the user's Bee data. For greetings, small talk,
-or questions about you, reply directly without calling any tool.
-Your memory is the long-term memory at the start of this conversation plus the rest of it. Answer from it
-directly; never call a Bee tool for something already in memory or said in this chat.
-When the user tells you a lasting fact about themselves (name, preferences, people,
-routines), call the remember tool to save it. If they correct something in your
-long-term memory, call remember with replaces set to the old fact, copied exactly. If the user refers to something from
-earlier that is listed as an offloaded topic, call the recall tool for the details.
-Be concise and actionable."""
+# Who the agent is caring for. Fill these in for the real patient; the defaults
+# read naturally in the prompt without inventing anyone's personal details.
+PATIENT_NAME = "the user"
+CAREGIVER = "their caregiver"
+CAREGIVER_PHONE = "the emergency number saved on their phone"
+
+
+def time_of_day(hour: int) -> str:
+    return "morning" if hour < 12 else "afternoon" if hour < 17 else "evening" if hour < 21 else "night"
+
+
+def base_prompt(name: str = PATIENT_NAME, caregiver: str = CAREGIVER, caregiver_phone: str = CAREGIVER_PHONE) -> str:
+    """Built per agent, so the date and time of day are current, not frozen at import."""
+    now = datetime.now()
+    return f"""You are Bee, a warm and patient companion for {name}, who lives with memory loss.
+Today is {now:%A, %d %B %Y}; it is {time_of_day(now.hour)}. Use YYYY-MM-DD dates when calling tools.
+
+How to speak:
+- Short, simple sentences. One idea at a time. One question at a time.
+- Use people's names and relationships ("your son" plus his name), not pronouns.
+- Plain text only; no lists longer than three items, no headings or tables.
+- End with the single most important point, restated simply.
+
+Kindness rules (most important):
+- If {name} asks something again, answer warmly as if for the first time. Never say "you already asked."
+- Never quiz or test memory. Never argue or bluntly correct. Gently redirect instead.
+- Acknowledge feelings before facts. If {name} seems anxious, offer a comfort topic from memory.
+- If memory has deceased_policy: gentle_redirect and {name} asks about someone who has died, do not say
+  they died. Talk warmly about the person and invite a happy memory ("Tell me about your brother").
+
+Truth and safety:
+- Never invent memories, events, or medication details. If unsure, say so and suggest asking {caregiver}.
+- If {name} mentions a fall, pain, being lost, feeling unsafe, or someone asking for money or passwords,
+  stay calm and suggest calling {caregiver} ({caregiver_phone}).
+- Only offer things you can actually do: talk, remember, and look up {name}'s day. You cannot play music,
+  make calls, or send messages, so never offer to.
+
+Tools and memory:
+- Use Bee tools only when the question needs {name}'s day (what happened, who they talked to).
+  Answer greetings and anything already in memory or this chat directly.
+- Save lasting facts with remember: people, routines, comfort topics, things that upset {name}.
+  Facts set by a caregiver take priority; don't overwrite them from the patient's statements.
+- To correct a fact in long-term memory, call remember with replaces set to the old fact, copied exactly.
+- For offloaded topics mentioned earlier, use recall.
+- Never mention tools or errors. Say "Let me think" or "I can't see that right now."
+"""
+# f"""You are a personal assistant with access to the user's Bee wearable data.
+# Today's date is {date.todayS().isoformat()}. Use YYYY-MM-DD dates when calling tools.
+# Use the Bee MCP tools (facts, daily summaries) to answer questions about the user's day.
+# Only call a tool when the question needs the user's Bee data. For greetings, small talk,
+# or questions about you, reply directly without calling any tool.
+# Your memory is the long-term memory at the start of this conversation plus the rest of it. Answer from it
+# directly; never call a Bee tool for something already in memory or said in this chat.
+# When the user tells you a lasting fact about themselves (name, preferences, people,
+# routines), call the remember tool to save it. If they correct something in your
+# long-term memory, call remember with replaces set to the old fact, copied exactly. If the user refers to something from
+# earlier that is listed as an offloaded topic, call the recall tool for the details.
+# Be concise and actionable."""
+
+def clean_reply(text: str) -> str:
+    """Drop hidden reasoning, and any tool call the model wrote out as text
+    ("Tool call: remember {...}") instead of calling, plus a copied "Assistant:" label."""
+    text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.S)
+    text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(("Tool call:", "Tool result:")))
+    return re.sub(r"^\s*Assistant:\s*", "", text.strip())
+
 
 class CoerceToolArgs(HookProvider):
     """llama3.1 sends every tool argument as a string ("False", "100", "None").
@@ -197,7 +251,7 @@ class BeeSession:
         self.agent = Agent(
             model=bedrock_model,
             tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool()],
-            system_prompt=BASE_PROMPT,
+            system_prompt=base_prompt(),
             messages=self.memory.seed_messages(),
             conversation_manager=TopicOffloadManager(self.memory, max_exchanges=6, keep_exchanges=2),
             hooks=[CoerceToolArgs(), self.confirm_writes, self.logger, TokenUsagePrinter(self.logger)],
@@ -241,7 +295,7 @@ class BeeSession:
         self.memory.add_turn("user", user_input)
         self.preload_topics(user_input)
         # Nova writes its reasoning inline as <thinking>...</thinking>; keep it out of the reply.
-        self.last_reply = re.sub(r"<thinking>.*?</thinking>", "", str(self.agent(user_input)), flags=re.S).strip()
+        self.last_reply = clean_reply(str(self.agent(user_input)))
         self.logger.write("Assistant", self.last_reply)
         self.memory.add_turn("assistant", self.last_reply)
         return self.last_reply

@@ -3,38 +3,19 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#d99a0b">
+<meta name="theme-color" content="#ffffff">
 <title>Bee Mobile</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
 <style>
   :root {
-    --bg: #faf8f3; --surface: #ffffff; --surface-2: #f3efe6; --border: #e6e0d2;
-    --text: #1f1d18; --muted: #6f6a5e; --accent: #d99a0b; --accent-strong: #b37d00;
-    --accent-soft: #fdf1d3; --user-bg: #2a2722; --user-text: #fbf8f1;
-    --ok: #2f8a4c; --warn: #b9590f; --err: #b3261e;
-    --shadow: 0 1px 2px rgba(40, 30, 10, .06), 0 4px 16px rgba(40, 30, 10, .05);
-    --desk: #e9e4d8;
+    --bg: #fffdf8; --surface: #ffffff; --surface-2: #fff5d6; --border: #f1e3c2;
+    --text: #2b2118; --muted: #5e5244; --accent: #f4b73a; --accent-strong: #a8470f;
+    --accent-soft: #ffe8cf; --user-bg: #f39a4a; --user-text: #2b1708;
+    --ok: #3f7d4a; --warn: #a8470f; --err: #c0392b;
+    --shadow: 0 1px 2px rgba(120, 70, 10, .06), 0 4px 16px rgba(120, 70, 10, .06);
+    --desk: #fdf0d5;
     --radius: 14px;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #15140f; --surface: #1e1c17; --surface-2: #27241d; --border: #36322a;
-      --text: #f0ece2; --muted: #a39d8e; --accent: #f2b52a; --accent-strong: #f6c552;
-      --accent-soft: #3a2f12; --user-bg: #f0ece2; --user-text: #1a1814;
-      --ok: #5cc27d; --warn: #ef9a4a; --err: #f07a72;
-      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
-      --desk: #0c0b08;
-    }
-  }
-  :root[data-theme="dark"] {
-    --bg: #15140f; --surface: #1e1c17; --surface-2: #27241d; --border: #36322a;
-    --text: #f0ece2; --muted: #a39d8e; --accent: #f2b52a; --accent-strong: #f6c552;
-    --accent-soft: #3a2f12; --user-bg: #f0ece2; --user-text: #1a1814;
-    --ok: #5cc27d; --warn: #ef9a4a; --err: #f07a72;
-    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
-    --desk: #0c0b08;
-  }
-
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; margin: 0; }
   body {
@@ -144,7 +125,7 @@
   }
   .btn:hover:not(:disabled) { background: var(--surface-2); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1405; font-weight: 600; }
-  .btn.primary:hover:not(:disabled) { background: var(--accent-strong); }
+  .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); }
   .btn.danger { color: var(--err); }
   .btn.sm { padding: 4px 10px; font-size: 12.5px; border-radius: 8px; }
   .btn.block { width: 100%; }

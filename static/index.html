@@ -7,38 +7,29 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
 <style>
   :root {
-    --bg: #faf8f3;
+    --bg: #fffdf8;
     --surface: #ffffff;
-    --surface-2: #f3efe6;
-    --border: #e6e0d2;
-    --text: #1f1d18;
-    --muted: #6f6a5e;
-    --accent: #d99a0b;
-    --accent-strong: #b37d00;
-    --accent-soft: #fdf1d3;
-    --user-bg: #2a2722;
-    --user-text: #fbf8f1;
-    --ok: #2f8a4c;
-    --warn: #b9590f;
-    --err: #b3261e;
-    --shadow: 0 1px 2px rgba(40, 30, 10, .06), 0 4px 16px rgba(40, 30, 10, .05);
+    --surface-2: #fff5d6;
+    --border: #f1e3c2;
+    --text: #2b2118;
+    --muted: #5e5244;
+    --accent: #f4b73a;
+    --accent-strong: #a8470f;
+    --accent-soft: #ffe8cf;
+    --user-bg: #f39a4a;
+    --user-text: #2b1708;
+    --ok: #3f7d4a;
+    --warn: #a8470f;
+    --err: #c0392b;
+    --shadow: 0 1px 2px rgba(120, 70, 10, .06), 0 4px 16px rgba(120, 70, 10, .06);
     --radius: 14px;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #15140f; --surface: #1e1c17; --surface-2: #27241d; --border: #36322a;
-      --text: #f0ece2; --muted: #a39d8e; --accent: #f2b52a; --accent-strong: #f6c552;
-      --accent-soft: #3a2f12; --user-bg: #f0ece2; --user-text: #1a1814;
-      --ok: #5cc27d; --warn: #ef9a4a; --err: #f07a72;
-      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
-    }
-  }
   :root[data-theme="dark"] {
-    --bg: #15140f; --surface: #1e1c17; --surface-2: #27241d; --border: #36322a;
-    --text: #f0ece2; --muted: #a39d8e; --accent: #f2b52a; --accent-strong: #f6c552;
-    --accent-soft: #3a2f12; --user-bg: #f0ece2; --user-text: #1a1814;
-    --ok: #5cc27d; --warn: #ef9a4a; --err: #f07a72;
+    --bg: #1f1a14; --surface: #29221a; --surface-2: #33291c; --border: #45382a;
+    --text: #f5ecdc; --muted: #bcae98; --accent: #f4b73a; --accent-strong: #f7a868;
+    --accent-soft: #40301a; --user-bg: #f39a4a; --user-text: #2b1708;
+    --ok: #8cc596; --warn: #f7a868; --err: #ef7d6e;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
   }
 
@@ -71,7 +62,7 @@
   }
   .btn:hover:not(:disabled) { background: var(--surface-2); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1405; font-weight: 600; }
-  .btn.primary:hover:not(:disabled) { background: var(--accent-strong); }
+  .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); }
   .icon-btn { border: none; background: none; color: var(--muted); padding: 6px; border-radius: 8px; font-size: 16px; }
   .icon-btn:hover { background: var(--surface-2); color: var(--text); }
   #toggle-side { display: none; }
@@ -211,8 +202,7 @@ let state = null, busy = false;
 // ---- theme --------------------------------------------------------------
 try { const t = localStorage.getItem("bee-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
 $("theme").onclick = () => {
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const cur = document.documentElement.dataset.theme || "light";
   const next = cur === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem("bee-theme", next); } catch {}
