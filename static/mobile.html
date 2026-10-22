@@ -202,6 +202,11 @@
   .flash-empty { font-size: 13px; color: var(--muted); padding: 10px 14px; border: 1px dashed var(--border); border-radius: var(--radius); }
   @media (prefers-reduced-motion: reduce) { .flash .inner { transition: none; } }
 
+  /* likes to know: questions asked often, answered ahead of time */
+  .ltk .q { font-size: 13px; color: var(--muted); }
+  .ltk .a { font-size: 18px; font-weight: 600; line-height: 1.35; margin-top: 4px; overflow-wrap: anywhere; }
+  .qrow .count { flex: none; }
+
   /* transcript */
   .utt { display: flex; gap: 8px; padding: 6px 0; }
   .utt .who { font-size: 11.5px; font-weight: 600; color: var(--accent-strong); }
@@ -483,6 +488,7 @@ loaders.home = async (force) => {
     const soon = (todosCache?.todos || []).filter((t) => !t.completed && t.alarm_at && t.alarm_at > Date.now() - 3600e3 && t.alarm_at < Date.now() + 2 * 86400e3)
       .sort((a, b) => a.alarm_at - b.alarm_at);
     let html = `<p class="greet">${greet} 👋</p><p class="small" style="margin:2px 0 12px">${day(Date.now())}</p>`;
+    if (!EMBED) html += `<div id="ltk"></div>`;  // the web app shows these on its chat start screen
     if (today) html += `<div class="card hero tap" data-daily="0"><div class="small">${day(today.date_time)} · Latest daily summary</div>
       <h3 style="margin-top:4px">${esc(today.short_summary)}</h3><span class="link">Read more</span></div>`;
     if (soon.length) html += `<h2 class="sec">Upcoming reminders</h2><div class="list">${soon.slice(0, 4).map((t) =>
@@ -505,6 +511,7 @@ loaders.home = async (force) => {
     if (h.daily.length > 1) html += `<h2 class="sec">Earlier days</h2><div class="list">${h.daily.slice(1).map((d, n) =>
       `<div class="item tap" data-daily="${n + 1}"><div class="txt"><div class="small">${day(d.date_time)}</div>${esc(d.short_summary)}</div></div>`).join("")}</div>`;
     v.innerHTML = html;
+    loadLikesToKnow(false);
 
     v.querySelectorAll("[data-daily]").forEach((el) => el.onclick = () => {
       const d = h.daily[+el.dataset.daily];
@@ -524,6 +531,21 @@ loaders.home = async (force) => {
     v.innerHTML = `<div class="none">Couldn't load highlights.<br>${esc(e.message)}</div>`;
   }
 };
+
+// Questions the user asks again and again, with answers prepared once a day.
+async function loadLikesToKnow(refresh) {
+  const box = $("ltk");
+  if (!box) return;
+  if (refresh) box.innerHTML = `<h2 class="sec">You like to know</h2><div class="spinner"></div>`;
+  let data;
+  try { data = await api(`/api/m/likes-to-know${refresh ? "?refresh=true" : ""}`); }
+  catch (e) { box.innerHTML = refresh ? `<h2 class="sec">You like to know</h2><div class="none">Couldn't prepare answers. ${esc(e.message)}</div>` : ""; return; }
+  if (!$("ltk")) return;
+  if (!data.items.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h2 class="sec">You like to know <span class="act"><button class="link" id="ltk-refresh">Refresh</button></span></h2>` +
+    data.items.map((i) => `<div class="card ltk"><div class="q">${esc(i.question)}</div><div class="a">${esc(i.answer || "…")}</div></div>`).join("");
+  $("ltk-refresh").onclick = () => loadLikesToKnow(true);
+}
 
 // ---- conversations ------------------------------------------------------------------
 function convCard(c) {
@@ -573,9 +595,15 @@ async function loadLearning() {
   try { data = await api("/api/m/learning"); }
   catch (e) { box.innerHTML = `<h2 class="sec">Learning about you</h2><div class="none">Couldn't load. ${esc(e.message)}</div>`; return; }
   const { items, promote_after: need } = data;
+  const qs = data.questions || [], qNeed = data.question_promote_after, qDays = data.question_window_days;
+  const qHtml = qs.length ? `<h2 class="sec">Questions you ask <span class="chip">${qs.length}</span></h2>
+    <p class="small" style="margin:0 0 8px">Asked ${qNeed} times within ${qDays} days, a question moves to "Likes to know" and its answer shows on the home page.</p>
+    <div class="list">${qs.map((q) => `<div class="item qrow"><div class="txt">${esc(q.text)}
+      ${q.examples?.length ? `<div class="small clamp2">“${esc(q.examples.at(-1))}”</div>` : ""}</div>
+      <span class="chip accent count">${q.asked.length} of ${qNeed}</span></div>`).join("")}</div>` : "";
   const head = `<h2 class="sec">Learning about you${items.length ? ` <span class="chip">${items.length}</span>` : ""}</h2>`;
   if (!items.length) {
-    box.innerHTML = head + `<div class="flash-empty">Things you tell Bee in chat show up here. Once you mention one again in another session, it moves to long-term memory.</div>`;
+    box.innerHTML = head + `<div class="flash-empty">Things you tell Bee in chat show up here. Once you mention one again in another session, it moves to long-term memory.</div>` + qHtml;
     return;
   }
   const latest = (c) => c.heard.at(-1)?.session || "";
@@ -600,7 +628,7 @@ async function loadLearning() {
           <div class="row"><button class="btn sm danger" data-forget>Forget</button><span class="grow"></span><button class="btn sm primary" data-keep>Remember now</button></div>
         </div>
       </div></div>`;
-  }).join("")}</div>`;
+  }).join("")}</div>` + qHtml;
   box.querySelectorAll(".flash").forEach((el) => {
     const card = items.find((c) => c.id === el.dataset.card);
     el.onclick = () => el.classList.toggle("flipped");
@@ -785,8 +813,8 @@ setInterval(checkReminders, 15e3);
 setInterval(async () => { try { await loadTodos(true); checkReminders(); } catch {} }, 120e3);
 
 // ---- profile -------------------------------------------------------------------------
-const CATS = ["preferences", "people", "routines", "facts"];
-const cap = (s) => s[0].toUpperCase() + s.slice(1);
+const CATS = ["preferences", "people", "routines", "facts", "likes_to_know"];
+const cap = (s) => s === "likes_to_know" ? "Likes to know" : s[0].toUpperCase() + s.slice(1);
 let profileData = null;
 loaders.profile = async (force) => {
   const v = $("view-profile");

@@ -69,6 +69,14 @@
   main { flex: 1; display: flex; min-height: 0; position: relative; padding-left: 66px; }
   .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   #messages { flex: 1; overflow-y: auto; padding: 24px 20px 12px; }
+  /* before the first message: start screen, cards and chat bar centred in the page as one block */
+  /* auto margins rather than justify-content: centred when it fits, scrollable (not cut off) when it doesn't */
+  .chat.fresh { overflow-y: auto; }
+  .chat.fresh #messages { flex: 0 0 auto; overflow: visible; padding-top: 0; margin-top: auto; }
+  .chat.fresh .composer { margin-bottom: auto; }
+  .chat.fresh #messages, .chat.fresh .composer { position: relative; top: -20px; }  /* sit slightly above centre */
+  .chat.fresh .ltk { flex: none; margin-bottom: 200px; }  /* last in the column: bottom of the page, with a little room */
+  .chat.fresh .empty { margin-top: 0; }
   .inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 
   .msg { display: flex; flex-direction: column; max-width: 85%; }
@@ -103,6 +111,17 @@
   .suggestions button { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 6px 12px; font-size: 13.5px; }
   .suggestions button:hover { border-color: var(--accent); background: var(--accent-soft); }
 
+  /* "You like to know": questions asked often, answered ahead of time */
+  .ltk { width: calc(100% - 40px); max-width: 1100px; margin: 0 auto 20px; text-align: left; }
+  .ltk h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 8px; font-weight: 650; text-align: center; }
+  .ltk-grid { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 1000px) { .ltk-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); } }
+  .ltk-card { border: 1px solid var(--border); background: var(--surface); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); text-align: left; color: var(--text); }
+  .ltk-card:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .ltk-card { display: flex; flex-direction: column; justify-content: flex-start; }
+  /* two lines kept for every question, so all answers start on the same line */
+  .ltk-card .q { font-size: 12.5px; color: var(--muted); line-height: 1.35; min-height: 2.7em; }
+  .ltk-card .a { font-size: 15.5px; font-weight: 600; line-height: 1.35; margin-top: 4px; }
   .composer { padding: 12px 20px 18px; }
   .composer form {
     max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end;
@@ -115,6 +134,7 @@
   }
   .hint { max-width: 760px; margin: 6px auto 0; font-size: 12px; color: var(--muted); text-align: center; }
   .banner { max-width: 760px; margin: 0 auto 10px; border: 1px solid var(--err); color: var(--err); border-radius: 10px; padding: 8px 12px; font-size: 13.5px; display: flex; gap: 10px; align-items: center; }
+  .banner[hidden] { display: none; }
   .banner code { font-family: var(--mono); font-size: 12px; }
 
 
@@ -145,6 +165,9 @@
   body[data-tab="chat"] #frame { display: none; }
 
   @media (max-width: 860px) {
+    /* one row to swipe through, so the cards don't push the chat bar off screen */
+    .ltk-grid { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 4px; }
+    .ltk-card { flex: 0 0 78%; scroll-snap-align: start; }
     main { padding: 0 0 62px; }
     .menu, .menu:hover, .menu:focus-within {
       position: fixed; top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 62px; z-index: 15; box-shadow: none;
@@ -164,7 +187,7 @@
 <body data-tab="chat">
 <header>
   <span class="logo">🐝</span>
-  <h1>Bee Assistant</h1>
+  <h1>Bee- Your Assistant</h1>
   <span class="status"><span id="dot" class="dot"></span><span id="status-label" class="label">Connecting…</span></span>
   <span class="spacer"></span>
   <button id="end" class="btn" title="Save this session into long-term memory and start a new one">Save &amp; new session</button>
@@ -179,7 +202,7 @@
     <button data-tab="todos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg><span class="label">To-dos</span><span class="badge" id="todo-badge" hidden></span></button>
     <button data-tab="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4.5-6 8-6s7 2 8 6"/></svg><span class="label">Profile</span></button>
   </nav>
-  <div class="chat">
+  <div class="chat fresh" id="chat">
     <div id="messages"><div class="inner" id="list">
       <div class="empty" id="empty">
         <div class="big">🐝</div>
@@ -201,6 +224,7 @@
       </form>
       <div class="hint">Enter to send · Shift+Enter for a new line · Write actions always ask first</div>
     </div>
+    <div class="ltk" id="ltk" hidden></div>
   </div>
 
   <iframe id="frame" title="Bee"></iframe>
@@ -278,6 +302,8 @@ function scrollDown() { scroller.scrollTop = scroller.scrollHeight; }
 
 function addMessage(role, html, cls = "") {
   $("empty")?.remove();
+  $("ltk")?.remove();  // start-screen cards; the chat takes over
+  $("chat").classList.remove("fresh");  // chat bar back to the bottom
   const el = document.createElement("div");
   el.className = `msg ${role} ${cls}`;
   el.innerHTML = `<div class="bubble">${html}</div><div class="meta"></div>`;
@@ -397,6 +423,23 @@ input.addEventListener("keydown", (e) => {
 });
 $("form").onsubmit = (e) => { e.preventDefault(); sendMessage(input.value); };
 document.querySelectorAll(".suggestions button").forEach((b) => b.onclick = () => sendMessage(b.textContent));
+
+// Questions the user asks often, with answers prepared once a day (likes_to_know.py).
+// Shown on the chat start screen; tapping one asks Bee.
+async function loadLikesToKnow() {
+  const box = $("ltk");
+  if (!box) return;
+  let data;
+  try { data = await api("/api/m/likes-to-know"); } catch { return; }
+  if (!$("ltk") || !data.items.length) return;
+  // One row for up to 5 questions, otherwise two even rows.
+  const cols = data.items.length <= 5 ? data.items.length : Math.ceil(data.items.length / 2);
+  box.innerHTML = `<h3>You like to know</h3><div class="ltk-grid" style="--cols:${cols}">${data.items.map((i) =>
+    `<button class="ltk-card" title="Ask Bee"><div class="q">${esc(i.question)}</div><div class="a">${esc(i.answer || "…")}</div></button>`).join("")}</div>`;
+  box.querySelectorAll(".ltk-card").forEach((b, n) => b.onclick = () => sendMessage(data.items[n].question));
+  box.hidden = false;
+}
+loadLikesToKnow();
 
 // ---- state -----------------------------------------------------
 function alertBanner(msg, retry = false) {

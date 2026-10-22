@@ -20,7 +20,7 @@ import shutil
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -31,6 +31,8 @@ MEMORY_DIR = Path(__file__).parent / "memory"
 CATEGORIES = ("profile", "preferences", "people", "routines", "facts")
 RECALL_CHARS = 4000  # max characters of one topic preloaded into the context
 PROMOTE_AFTER = 2  # sessions a fact must come up in before it moves to persistent memory
+QUESTION_WINDOW_DAYS = 5  # how long a question the user asked is remembered in intermediate memory
+QUESTION_PROMOTE_AFTER = 3  # asks within the window before it moves to "likes to know"
 
 
 class Memory(BaseModel):
@@ -44,6 +46,10 @@ class Memory(BaseModel):
     people: list[str] = Field(default_factory=list, description="People in the user's life and how they relate.")
     routines: list[str] = Field(default_factory=list, description="Habits, schedules, recurring events.")
     facts: list[str] = Field(default_factory=list, description="Other durable facts worth remembering.")
+    likes_to_know: list[str] = Field(
+        default_factory=list,
+        description="Questions the user asks again and again; answered ahead of time on the home page.",
+    )
 
 
 class MemoryItem(BaseModel):
@@ -265,9 +271,95 @@ def load_intermediate(memory_dir: Path) -> list[dict]:
     return _read_json(memory_dir / "intermediate.json", {}).get("items", [])
 
 
-def save_intermediate(memory_dir: Path, cards: list[dict]) -> None:
+def load_questions(memory_dir: Path) -> list[dict]:
+    """Questions the user asked recently: {id, text, asked: [ISO times], examples}."""
+    return _read_json(memory_dir / "intermediate.json", {}).get("questions", [])
+
+
+def save_intermediate(memory_dir: Path, cards: list[dict], questions: list[dict] | None = None) -> None:
+    """Write the fact cards (and the tracked questions, or keep the ones on disk)."""
+    if questions is None:
+        questions = load_questions(memory_dir)
     _write_json(memory_dir / "intermediate.json",
-                {"updated_at": datetime.now().isoformat(timespec="seconds"), "items": cards})
+                {"updated_at": datetime.now().isoformat(timespec="seconds"), "items": cards, "questions": questions})
+
+
+# ---- questions the user keeps asking ("likes to know") ---------------------------
+
+_QUESTION_START = re.compile(r"^(what|when|where|who|whose|why|how|which|is|are|am|was|were|do|does|did|can|"
+                             r"could|will|would|should|has|have)\b", re.IGNORECASE)
+
+
+def _questions_in(text: str) -> list[str]:
+    return [x for x in _sentences(text) if x.endswith("?") or _QUESTION_START.match(x)]
+
+
+class QuestionMatch(BaseModel):
+    n: int = Field(description="Number of the asked question in the list.")
+    standing: bool = Field(description="True if it is a standing question: its answer comes from the user's "
+                           "memory, today's date or their day (e.g. 'What day is it?', 'When is Leo's game?', "
+                           "'Where is Margaret?'). False for one-off requests, small talk and general knowledge.")
+    match: str = Field(default="", description="Id of the tracked or known question it asks again, or empty.")
+    canonical: str = Field(default="", description="Short neutral wording of the question, e.g. 'What day is it?'.")
+
+
+class QuestionPlan(BaseModel):
+    questions: list[QuestionMatch]
+
+
+def _track_questions(model, mem: Memory, questions: list[dict], asked: list[tuple[str, str]],
+                     now: datetime | None = None) -> list[str]:
+    """Count the questions asked this session (``asked``: (ISO time, question)).
+    One that has been asked QUESTION_PROMOTE_AFTER times within the last
+    QUESTION_WINDOW_DAYS moves to ``mem.likes_to_know``. Updates ``questions``
+    in place and returns the questions promoted."""
+    now = now or datetime.now()
+    cutoff = now - timedelta(days=QUESTION_WINDOW_DAYS)
+    for q in questions:
+        q["asked"] = [a for a in q["asked"] if datetime.fromisoformat(a) >= cutoff]
+    questions[:] = [q for q in questions if q["asked"]]
+    if not asked:
+        return []
+    known = {f"k{i}": text for i, text in enumerate(mem.likes_to_know)}
+    tracked = "\n".join(f"- {q['id']}: {q['text']}" for q in questions) or "(none)"
+    already = "\n".join(f"- {k}: {v}" for k, v in known.items()) or "(none)"
+    listing = "\n".join(f"{i}. {text}" for i, (_, text) in enumerate(asked, start=1))
+    plan = _structured(model, QuestionPlan, f"""A person with memory loss asked these questions in a chat.
+Find the standing questions and match repeats, so their answers can be prepared ahead of time.
+
+QUESTIONS ALREADY ANSWERED AHEAD OF TIME:
+{already}
+
+QUESTIONS ASKED RECENTLY:
+{tracked}
+
+ASKED IN THIS CHAT:
+{listing}
+
+For every question asked in this chat, return its number n, whether it is a standing question,
+the id of the question above it asks again (same meaning, even if worded differently) or empty,
+and a short neutral wording (canonical).""")
+    by_id = {q["id"]: q for q in questions}
+    for m in plan.questions:
+        if not m.standing or not 1 <= m.n <= len(asked) or m.match in known:
+            continue
+        at, said = asked[m.n - 1]
+        text = (m.canonical or said).strip()
+        if text.lower() in {x.lower() for x in mem.likes_to_know}:
+            continue
+        q = by_id.get(m.match) or next((x for x in questions if x["text"].lower() == text.lower()), None)
+        if q is None:
+            q = {"id": uuid.uuid4().hex[:8], "text": text, "asked": [], "examples": []}
+            questions.append(q)
+            by_id[q["id"]] = q
+        q["asked"].append(at)
+        if said not in q["examples"]:
+            q["examples"] = (q["examples"] + [said])[-5:]
+    promoted = [q for q in questions if len(q["asked"]) >= QUESTION_PROMOTE_AFTER]
+    for q in promoted:
+        mem.likes_to_know.append(q["text"])
+        questions.remove(q)
+    return [q["text"] for q in promoted]
 
 
 def save_persistent(memory_dir: Path, mem: Memory) -> None:
@@ -416,6 +508,9 @@ class MemoryStore:
             if items:
                 lines.append(f"{category.capitalize()}:")
                 lines += [f"  - {item}" for item in items]
+        if mem.likes_to_know:
+            lines.append("Likes to know (asks these often; always answer them warmly, as if for the first time):")
+            lines += [f"  - {q}" for q in mem.likes_to_know]
         if not lines:
             return "Long-term memory about the user: (empty)"
         return "Long-term memory about the user (from earlier sessions):\n" + "\n".join(lines)
@@ -500,7 +595,8 @@ class MemoryStore:
 
     def add_turn(self, role: str, text: str) -> None:
         with self._lock:
-            self.session["transcript"].append({"role": role, "text": text})
+            self.session["transcript"].append({"role": role, "text": text,
+                                               "at": datetime.now().isoformat(timespec="seconds")})
         self._save_session()
 
     def add_note(self, category: str, note: str, replaces: str = "") -> None:
@@ -634,8 +730,17 @@ Every exchange number from 1 to {len(exchanges)} must appear in exactly one topi
                    if (saved := _hear(merged, cards, category, text, heard_in, _quote(text, said)))]
         if learned:
             print("Added to long-term memory (heard again): " + "; ".join(learned))
+        questions = load_questions(self.memory_dir)
+        asked = [(t.get("at") or heard_in, q) for t in session.get("transcript", []) if t["role"] == "user"
+                 for q in _questions_in(t["text"])]
+        try:
+            promoted = _track_questions(self.model, merged, questions, asked)
+            if promoted:
+                print("Added to likes to know (asked often): " + "; ".join(promoted))
+        except Exception as exc:
+            print(f"(question tracking failed: {exc})")
         save_persistent(self.memory_dir, merged)
-        save_intermediate(self.memory_dir, cards)
+        save_intermediate(self.memory_dir, cards, questions)
         self.session_path.unlink(missing_ok=True)
 
     def _extract_update(self, current: Memory, said: list[str]) -> MemoryUpdate:

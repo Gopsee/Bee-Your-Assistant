@@ -30,9 +30,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from strands.hooks import AfterModelCallEvent, AfterToolCallEvent, HookProvider, HookRegistry
 
-from bee import LOG_DIR, BeeSession
+from bee import CAREGIVER, CAREGIVER_PHONE, LOG_DIR, BeeSession, bedrock_model
 from bee_data import BeeData, BeeError
-from memory import CATEGORIES, MEMORY_DIR, PROMOTE_AFTER, Memory, _read_json, _write_json, load_intermediate, settle_card
+from likes_to_know import answers_for
+from memory import (CATEGORIES, MEMORY_DIR, PROMOTE_AFTER, QUESTION_PROMOTE_AFTER, QUESTION_WINDOW_DAYS, Memory,
+                    _read_json, _write_json, load_intermediate, load_questions, settle_card)
 from topic_screen import NOT_RELATED, TopicScreen
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -283,7 +285,7 @@ class CardIn(BaseModel):
 
 
 class MemoryEditIn(BaseModel):
-    category: Literal[CATEGORIES]
+    category: Literal[CATEGORIES + ("likes_to_know",)]
     action: Literal["add", "edit", "delete"]
     old: str = ""    # the entry being edited or deleted (the key, for profile)
     key: str = ""    # profile only
@@ -407,7 +409,22 @@ def create_app(memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR) -> FastAP
 
     @app.get("/api/m/learning")
     def learning():
-        return {"items": load_intermediate(memory_dir), "promote_after": PROMOTE_AFTER}
+        return {"items": load_intermediate(memory_dir), "promote_after": PROMOTE_AFTER,
+                "questions": load_questions(memory_dir), "question_promote_after": QUESTION_PROMOTE_AFTER,
+                "question_window_days": QUESTION_WINDOW_DAYS}
+
+    @app.get("/api/m/likes-to-know")
+    def likes_to_know(refresh: bool = False):
+        """Questions the user asks often, with today's prepared answers."""
+        try:
+            daily = data.highlights()["daily"]
+            today = f"{daily[0].get('short_summary', '')}\n{(daily[0].get('summary') or '')[:2000]}" if daily else ""
+        except BeeError:
+            today = ""  # answer from memory and the date alone
+        try:
+            return answers_for(memory_dir, bedrock_model, today, CAREGIVER, CAREGIVER_PHONE, refresh)
+        except Exception as exc:
+            raise HTTPException(502, f"Couldn't prepare answers: {exc}")
 
     @app.post("/api/m/learning/{card_id}")
     def learning_settle(card_id: str, body: CardIn):
