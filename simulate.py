@@ -27,7 +27,7 @@ from pathlib import Path
 from strands import Agent
 
 from bee import BeeSession, bedrock_model
-from memory import MEMORY_DIR
+from memory import MEMORY_DIR, load_intermediate
 from topic_screen import NOT_RELATED, TopicScreen
 
 RUNS_DIR = Path(__file__).parent / "sim_runs"
@@ -188,9 +188,11 @@ class Budget:
 
 
 def memory_text(memory_dir: Path) -> str:
+    """Persistent plus intermediate memory: a fact told once is still being learned."""
     data = json.loads((memory_dir / "persistent.json").read_text(encoding="utf-8"))
     data.pop("updated_at", None)
-    return json.dumps(data, ensure_ascii=False).lower()
+    learning = [c["text"] for c in load_intermediate(memory_dir)]
+    return json.dumps([data, learning], ensure_ascii=False).lower()
 
 
 def _say(bee: BeeSession, message: str, replies: list[str], budget: Budget) -> bool:
@@ -209,7 +211,8 @@ def run_session(scenario: Scenario, session: Session, screen: TopicScreen, out: 
     """Let the customer chat with a fresh assistant session, step by step.
     Returns the failed checks for this session. Raises BudgetSpent if the run's
     budget ran out (the session is still closed, so its memory is saved)."""
-    bee = BeeSession(screen, memory_dir=out / "memory", log_dir=out / "logs", confirm=lambda prompt: "n")
+    bee = BeeSession(screen, memory_dir=out / "memory", log_dir=out / "logs", confirm=lambda prompt: "n",
+                     conversations=None)
     customer = Agent(model=bedrock_model, system_prompt=CUSTOMER_PROMPT.format(persona=scenario.persona),
                      callback_handler=None)
     replies, offloaded = [], False

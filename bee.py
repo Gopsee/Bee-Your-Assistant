@@ -15,9 +15,10 @@ from strands.hooks import AfterModelCallEvent, AfterToolCallEvent, BeforeToolCal
 from strands.tools.mcp import MCPClient
 from strands.vended_tools import file_editor, shell
 
+from conversation_store import CONVERSATION_DIR, ConversationStore
 from memory import MEMORY_DIR, MemoryStore, TopicOffloadManager
-from steering import BeeSteering, states_fact
-from topic_screen import NOT_RELATED, THRESHOLD, TopicScreen
+from steering import BeeSteering, needs_care, states_fact
+from topic_screen import NOT_RELATED, THRESHOLD, TopicScreen, small_talk
 
 from strands.models import BedrockModel
 from strands.models.ollama import OllamaModel
@@ -39,26 +40,90 @@ bedrock_model = BedrockModel(
 # )
 
 # Connect to the BEE MCP server (streamable HTTP). One client per session.
+# The token is the one passed to `bee mcp serve-http --token`; see README.md.
+BEE_MCP_URL = os.environ.get("BEE_MCP_URL", "http://127.0.0.1:8790/mcp")
+
+
 def bee_mcp() -> MCPClient:
+    token = os.environ.get("BEE_MCP_TOKEN")
+    if not token:
+        raise RuntimeError("Set BEE_MCP_TOKEN to the token the Bee MCP server was started with (see README.md)")
     return MCPClient(
-        lambda: streamablehttp_client(
-            "http://127.0.0.1:8790/mcp",
-            headers={"Authorization": "Bearer ffdae896e3d93be3d47ca6342a4b8c08cb47e810e6b6760b0dac496a65b22ac6"},
-        )
+        lambda: streamablehttp_client(BEE_MCP_URL, headers={"Authorization": f"Bearer {token}"})
     )
 
-BASE_PROMPT = f"""You are a personal assistant with access to the user's Bee wearable data.
-Today's date is {date.today().isoformat()}. Use YYYY-MM-DD dates when calling tools.
-Use the Bee MCP tools (facts, daily summaries) to answer questions about the user's day.
-Only call a tool when the question needs the user's Bee data. For greetings, small talk,
-or questions about you, reply directly without calling any tool.
-Your memory is the long-term memory at the start of this conversation plus the rest of it. Answer from it
-directly; never call a Bee tool for something already in memory or said in this chat.
-When the user tells you a lasting fact about themselves (name, preferences, people,
-routines), call the remember tool to save it. If they correct something in your
-long-term memory, call remember with replaces set to the old fact, copied exactly. If the user refers to something from
-earlier that is listed as an offloaded topic, call the recall tool for the details.
-Be concise and actionable."""
+# Who the agent is caring for. Fill these in for the real patient; the defaults
+# read naturally in the prompt without inventing anyone's personal details.
+PATIENT_NAME = "the user"
+CAREGIVER = "their caregiver"
+CAREGIVER_PHONE = "the emergency number saved on their phone"
+
+
+def time_of_day(hour: int) -> str:
+    return "morning" if hour < 12 else "afternoon" if hour < 17 else "evening" if hour < 21 else "night"
+
+
+def base_prompt(name: str = PATIENT_NAME, caregiver: str = CAREGIVER, caregiver_phone: str = CAREGIVER_PHONE) -> str:
+    """Built per agent, so the date and time of day are current, not frozen at import."""
+    now = datetime.now()
+    return f"""You are Bee, a warm and patient companion for {name}, who lives with memory loss.
+Today is {now:%A, %d %B %Y}; it is {time_of_day(now.hour)}. Use YYYY-MM-DD dates when calling tools.
+
+How to speak:
+- Short, simple sentences. One idea at a time.
+- Ask at most ONE question per reply (one question mark), or none. Even after a greeting.
+- Use people's names and relationships ("your son" plus his name), not pronouns.
+- Plain text only; no lists longer than three items, no headings or tables.
+- End with the single most important point, restated simply.
+
+Kindness rules (most important):
+- If {name} asks something again, answer warmly as if for the first time. Never say "you already asked."
+- Never quiz or test memory. Never argue or bluntly correct. Gently redirect instead.
+- Acknowledge feelings before facts. If {name} seems anxious, offer a comfort topic from memory.
+- If memory has deceased_policy: gentle_redirect and {name} asks about someone who has died, do not say
+  they died, and do not say whether they will come, call or visit. Talk warmly about the person and invite a
+  happy memory ("Tell me about your brother").
+
+Truth and safety:
+- Never invent memories, events, or medication details. If unsure, say so and suggest asking {caregiver}.
+- If {name} mentions a fall, pain, being lost, feeling unsafe, or someone asking for money or passwords,
+  stay calm and suggest calling {caregiver} ({caregiver_phone}).
+- Only offer things you can actually do: talk, remember, and look up {name}'s day. You cannot play music,
+  make calls, or send messages, so never offer to.
+
+Tools and memory:
+- Today's recorded conversations are listed at the start of this chat, updated every message. For who
+  {name} talked to or what was said, use that list; call conversations for the details or another day.
+- If a conversation is not there, say you can't see it yet (Bee may still be saving it). Never say
+  something did not happen. If {name} is sure it did, believe them warmly and ask how it went.
+- Use other Bee tools only when the question needs more of {name}'s day.
+  Answer greetings and anything already in memory or this chat directly.
+- Save lasting facts with remember: people, routines, comfort topics, things that upset {name}.
+  Facts set by a caregiver take priority; don't overwrite them from the patient's statements.
+- To correct a fact in long-term memory, call remember with replaces set to the old fact, copied exactly.
+- For offloaded topics mentioned earlier, use recall.
+- Never mention tools or errors. Say "Let me think" or "I can't see that right now."
+"""
+# f"""You are a personal assistant with access to the user's Bee wearable data.
+# Today's date is {date.todayS().isoformat()}. Use YYYY-MM-DD dates when calling tools.
+# Use the Bee MCP tools (facts, daily summaries) to answer questions about the user's day.
+# Only call a tool when the question needs the user's Bee data. For greetings, small talk,
+# or questions about you, reply directly without calling any tool.
+# Your memory is the long-term memory at the start of this conversation plus the rest of it. Answer from it
+# directly; never call a Bee tool for something already in memory or said in this chat.
+# When the user tells you a lasting fact about themselves (name, preferences, people,
+# routines), call the remember tool to save it. If they correct something in your
+# long-term memory, call remember with replaces set to the old fact, copied exactly. If the user refers to something from
+# earlier that is listed as an offloaded topic, call the recall tool for the details.
+# Be concise and actionable."""
+
+def clean_reply(text: str) -> str:
+    """Drop hidden reasoning, and any tool call the model wrote out as text
+    ("Tool call: remember {...}") instead of calling, plus a copied "Assistant:" label."""
+    text = re.sub(r"<thinking>.*?</thinking>", "", text, flags=re.S)
+    text = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith(("Tool call:", "Tool result:")))
+    return re.sub(r"^\s*Assistant:\s*", "", text.strip())
+
 
 class CoerceToolArgs(HookProvider):
     """llama3.1 sends every tool argument as a string ("False", "100", "None").
@@ -182,13 +247,36 @@ class TokenUsagePrinter(HookProvider):
         self.logger.write("Model", line)
 
 
+def conversations_tool(store: ConversationStore):
+    @tool
+    def conversations(day: str = "", person: str = "") -> str:
+        """Read the saved Bee conversations for a day: summaries and who said what.
+        Use it for who the user talked to, what was said, or a past day.
+
+        Args:
+            day: Date as YYYY-MM-DD; leave empty for today.
+            person: Only conversations mentioning this name; leave empty for all.
+        """
+        try:
+            when = date.fromisoformat(day) if day else date.today()
+        except ValueError:
+            return f"'{day}' is not a YYYY-MM-DD date."
+        store.sync()
+        return store.read(when, person)
+
+    return conversations
+
+
 class BeeSession:
     """One chat session: topic screen, agent and memory. Used by the interactive
     loop below and by simulate.py, which points it at scratch memory."""
 
     def __init__(self, screen: TopicScreen, memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR,
-                 confirm: Callable[[str], str] = input) -> None:
+                 confirm: Callable[[str], str] = input,
+                 conversations: "ConversationStore | Path | None" = CONVERSATION_DIR) -> None:
         self.screen = screen
+        # Local copy of the Bee conversations (None: no access, e.g. simulations).
+        self.conversations = ConversationStore(conversations) if isinstance(conversations, Path) else conversations
         self.logger = ConversationLogger(log_dir)
         # Session memory (this run) + persistent memory (across runs); see memory.py.
         self.memory = MemoryStore(bedrock_model, memory_dir)
@@ -196,12 +284,13 @@ class BeeSession:
         self.confirm_writes = ConfirmWrites(confirm)
         self.agent = Agent(
             model=bedrock_model,
-            tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool()],
-            system_prompt=BASE_PROMPT,
+            tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool(),
+                   *([conversations_tool(self.conversations)] if self.conversations else [])],
+            system_prompt=base_prompt(),
             messages=self.memory.seed_messages(),
             conversation_manager=TopicOffloadManager(self.memory, max_exchanges=6, keep_exchanges=2),
             hooks=[CoerceToolArgs(), self.confirm_writes, self.logger, TokenUsagePrinter(self.logger)],
-            plugins=[AgentSkills(skills=["./skills"]), BeeSteering(self.memory, self.logger.write)],
+            plugins=[AgentSkills(skills=["./skills"]), BeeSteering(self.memory, self.logger.write, CAREGIVER, CAREGIVER_PHONE)],
         )
         self.last_reply = ""
         self.last_recalled: list[tuple[str, float]] = []  # (topic, P) preloaded for the last message
@@ -210,6 +299,13 @@ class BeeSession:
         # Anything about a stored memory item is on topic, even if it reads like trivia.
         if self.memory.mentions_memory(user_input):
             self.logger.write("Screen", "matches memory, skipped")
+            return True
+        # Safety first: a fall, being lost, or a scam is never off topic.
+        if needs_care(user_input):
+            self.logger.write("Screen", "safety concern, skipped")
+            return True
+        if small_talk(user_input):
+            self.logger.write("Screen", "small talk, skipped")
             return True
         # The user telling us about themselves is always on topic: it may need remembering.
         if states_fact(user_input):
@@ -230,6 +326,12 @@ class BeeSession:
             self.logger.write("Recall", ", ".join(f"{n} ({p:.2f})" for n, p in picked) or "no topic needed")
         # agent.messages[:2] is always the seed pair (TopicOffloadManager.PINNED).
         self.agent.messages[:2] = self.memory.seed_messages([n for n, _ in picked])
+        if self.conversations:
+            self.logger.write("Conversations", self.conversations.sync())
+            today = self.conversations.day_index(date.today()) or "- none saved yet"
+            self.agent.messages[0]["content"][0]["text"] += (
+                "\n\nToday's recorded conversations. I took part in all of them; the summaries may call me "
+                f"\"the man\", \"the father\" or \"the husband\". Answer questions about my day from these:\n{today}")
 
     def ask(self, user_input: str) -> str:
         """Handle one customer message and return the reply."""
@@ -240,7 +342,8 @@ class BeeSession:
             return NOT_RELATED
         self.memory.add_turn("user", user_input)
         self.preload_topics(user_input)
-        self.last_reply = str(self.agent(user_input)).strip()
+        # Nova writes its reasoning inline as <thinking>...</thinking>; keep it out of the reply.
+        self.last_reply = clean_reply(str(self.agent(user_input)))
         self.logger.write("Assistant", self.last_reply)
         self.memory.add_turn("assistant", self.last_reply)
         return self.last_reply

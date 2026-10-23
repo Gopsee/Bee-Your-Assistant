@@ -7,6 +7,8 @@ The same engine also picks which offloaded topics (memory.py) the message needs:
 one yes/no question per topic, all evaluated in a single call, so bee.py can put
 those details in the context before the LLM runs.
 """
+import re
+
 from strands_decider.infer import load_engine
 from strands_decider.schema import NoulQuestion
 
@@ -16,6 +18,7 @@ THRESHOLD = 0.5  # minimum P(on topic) to let a message through
 NOT_RELATED = "Not related work"
 RECALL_THRESHOLD = 0.5  # minimum P(needs topic) to preload an offloaded topic
 MAX_RECALLED = 2  # preload at most this many topics per message
+PREVIOUS_REPLY_CHARS = 400  # end of the last reply the on-topic check sees; longer is slower on the CPU
 
 RECALL_CRITERIA = {
     "true": "The user's message refers back to this earlier topic (a person, plan, fact, "
@@ -43,6 +46,20 @@ ON_TOPIC = NoulQuestion(
 )
 
 
+# Greetings, thanks and goodbyes are always on topic, so they skip the (slow) screen.
+SMALL_TALK = re.compile(
+    r"(hi+|hey+|hello+|hiya|yo|good (morning|afternoon|evening|night)|morning|evening|"
+    r"thanks?( you)?( so much| very much| a lot)?|thank u|ty|cheers|ok(ay)?|bye|goodbye|good ?bye|"
+    r"see (you|ya)( later| soon| tomorrow)?|how are (you|u)( doing)?( today)?|what'?s up)"
+    r"( (bee|there|again|dear|love))?",
+    re.I,
+)
+
+
+def small_talk(message: str) -> bool:
+    return bool(SMALL_TALK.fullmatch(re.sub(r"[\s!.,?]+$", "", message.strip())))
+
+
 class TopicScreen:
     def __init__(self, checkpoint: str = CHECKPOINT, device: str = DEVICE) -> None:
         self.engine = load_engine(checkpoint, device=device)
@@ -50,7 +67,8 @@ class TopicScreen:
     def p_on_topic(self, message: str, previous_reply: str = "", user_memory: str = "") -> float:
         # Include the last reply so short follow-ups ("and yesterday?") keep their context,
         # and the user's memory so questions about their known interests count as on topic.
-        state = {"user_memory": user_memory, "assistant_previous_reply": previous_reply, "user_message": message}
+        state = {"user_memory": user_memory, "assistant_previous_reply": previous_reply[-PREVIOUS_REPLY_CHARS:],
+                 "user_message": message}
         response = self.engine.ask(state, {"on_topic": ON_TOPIC})
         return response.answers["on_topic"].noul
 

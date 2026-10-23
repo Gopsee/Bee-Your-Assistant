@@ -1,21 +1,26 @@
 """
-Two-tier memory for the Bee agent.
+Three-tier memory for the Bee agent.
 
-- memory/session.json:    notes + transcript for the current session only.
-- memory/persistent.json: organized long-term memory, shared across sessions.
+- memory/session.json:      notes + transcript for the current session only.
+- memory/intermediate.json: facts heard in some session but not yet often enough to keep.
+- memory/persistent.json:   organized long-term memory, shared across sessions.
 
-At the end of a session the session memory is merged into persistent memory,
-then cleared. Existing memory is only changed explicitly (the remember tool's
-``replaces``); the LLM can only add new, grounded facts. Long chats are kept
-small by offloading old exchanges into session memory by topic.
+At the end of a session the new facts it produced (remember notes and facts
+extracted from what the user said) go to intermediate memory, and the session
+is cleared. A fact moves to persistent memory once it has come up in
+PROMOTE_AFTER different sessions. Existing memory is only changed explicitly
+(the remember tool's ``replaces``), and that applies at once; the LLM can only
+add new, grounded facts. Long chats are kept small by offloading old exchanges
+into session memory by topic.
 """
 import asyncio
 import json
 import re
 import shutil
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -25,6 +30,9 @@ from strands.agent.conversation_manager import ConversationManager
 MEMORY_DIR = Path(__file__).parent / "memory"
 CATEGORIES = ("profile", "preferences", "people", "routines", "facts")
 RECALL_CHARS = 4000  # max characters of one topic preloaded into the context
+PROMOTE_AFTER = 2  # sessions a fact must come up in before it moves to persistent memory
+QUESTION_WINDOW_DAYS = 5  # how long a question the user asked is remembered in intermediate memory
+QUESTION_PROMOTE_AFTER = 3  # asks within the window before it moves to "likes to know"
 
 
 class Memory(BaseModel):
@@ -38,6 +46,10 @@ class Memory(BaseModel):
     people: list[str] = Field(default_factory=list, description="People in the user's life and how they relate.")
     routines: list[str] = Field(default_factory=list, description="Habits, schedules, recurring events.")
     facts: list[str] = Field(default_factory=list, description="Other durable facts worth remembering.")
+    likes_to_know: list[str] = Field(
+        default_factory=list,
+        description="Questions the user asks again and again; answered ahead of time on the home page.",
+    )
 
 
 class MemoryItem(BaseModel):
@@ -66,6 +78,17 @@ def _content_words(text: str) -> set[str]:
 # about the subject itself, so they don't count towards a memory match.
 _FRAMING = {w[:5] for w in ("interested", "prefers", "lives", "near", "moving", "likes", "enjoys",
                              "loves", "dislikes", "hates", "staying", "favourite", "favorite")}
+
+
+SCREEN_PROFILE_KEYS = ("name", "preferred name", "lives in", "former job", "job", "condition")
+GIST_WORDS = 8
+
+
+def _gist(item: str) -> str:
+    """The start of a memory item, for the topic screen: up to the first
+    parenthesis or semicolon, at most GIST_WORDS words."""
+    head = re.split(r"[(;]", item, maxsplit=1)[0]
+    return " ".join(head.split()[:GIST_WORDS]).rstrip(",")
 
 
 def _mentions(message: str, item: str) -> bool:
@@ -108,26 +131,57 @@ def _add_item(mem: Memory, category: str, item: str) -> bool:
     return True
 
 
-def _apply_notes(mem: Memory, notes: list[dict]) -> None:
-    """Apply what the agent saved with the remember tool. These are explicit,
-    so they may set profile values and replace existing items."""
+# Profile details only a caregiver sets; the patient's own statements don't overwrite them.
+CAREGIVER_KEYS = {"caregiver", "emergency contact", "deceased_policy", "condition"}
+_DEATH = re.compile(r"\b(passed away|passed on|died|dead|death|deceased|no longer (with us|alive)|not alive)\b",
+                    re.IGNORECASE)
+
+
+def caregiver_set(item: str) -> bool:
+    """A memory item a caregiver set: a death or an explicit caregiver note."""
+    return bool(_DEATH.search(item)) or "caregiver says" in item.lower()
+
+
+def _apply_notes(mem: Memory, cards: list[dict], notes: list[dict]) -> list[tuple[str, str]]:
+    """Apply what the agent saved with the remember tool. A correction of
+    something already in persistent memory (``replaces``, or a new value for a
+    known profile detail) is explicit, so it applies at once. Everything else
+    is returned as a candidate for intermediate memory. Caregiver-set facts are
+    never changed from chat, even if a remember call got past steering."""
+    candidates = []
     for n in notes:
         note, category, old = n["note"].strip(), n["category"], (n.get("replaces") or "").strip().lower()
         if category == "profile" and ":" in note:
             key, value = (part.strip() for part in note.split(":", 1))
+            if key.lower() in CAREGIVER_KEYS and key.lower() in mem.profile:
+                continue
             if key and value:
-                mem.profile[key.lower()] = value
+                if key.lower() in mem.profile:
+                    mem.profile[key.lower()] = value
+                else:
+                    candidates.append(("profile", f"{key.lower()}: {value}"))
             continue
-        if category == "profile":
+        if category not in CATEGORIES[1:]:
             category = "facts"
+        if old and caregiver_set(old):
+            continue
         if old:
+            replaced = False
             for c in CATEGORIES[1:]:
                 items = getattr(mem, c)
                 hits = [i for i, x in enumerate(items) if x.strip().lower() == old]
                 if hits:
                     del items[hits[0]]
+                    replaced = True
                     break
-        _add_item(mem, category, note)
+            if replaced:
+                _add_item(mem, category, note)
+                continue
+            # Correcting something still being learned: the old version is wrong, start over.
+            cards[:] = [c for c in cards if c["text"].strip().lower() != old]
+        if note and note.lower() not in _known(mem):
+            candidates.append((category, note))
+    return candidates
 
 
 def _overlapping(mem: Memory, item: str) -> str | None:
@@ -148,24 +202,200 @@ def _overlapping(mem: Memory, item: str) -> str | None:
     return None
 
 
-def _apply_update(mem: Memory, update: MemoryUpdate, statements: list[str]) -> list[str]:
-    """Add LLM-extracted facts that are new and grounded in a user statement.
-    Returns what was added."""
-    added, source = [], "\n".join(statements).lower()
+def _candidates(mem: Memory, update: MemoryUpdate, statements: list[str]) -> list[tuple[str, str]]:
+    """LLM-extracted facts that are new and grounded in a user statement, as
+    (category, text) candidates for intermediate memory."""
+    found, source = [], "\n".join(statements).lower()
     for key, value in update.profile.items():
         key, value = key.strip().lower(), value.strip()
         if key and value and key not in mem.profile and value.lower() in source:
-            mem.profile[key] = value
-            added.append(f"{key}: {value}")
+            found.append(("profile", f"{key}: {value}"))
     for a in update.add:
-        if not _grounded(a.item, statements):
+        item = a.item.strip()
+        if not item or not _grounded(item, statements) or item.lower() in _known(mem):
             continue
-        clash = _overlapping(mem, a.item)
+        clash = _overlapping(mem, item)
         if clash:
-            print(f"(not saving \"{a.item}\": overlaps \"{clash}\")")
-        elif _add_item(mem, a.category, a.item):
-            added.append(a.item)
-    return added
+            print(f"(not saving \"{item}\": overlaps \"{clash}\")")
+        else:
+            found.append((a.category if a.category in CATEGORIES[1:] else "facts", item))
+    return found
+
+
+def _same(a: str, b: str) -> bool:
+    """True if two items state the same thing ("likes cricket", "interested in
+    cricket"). Stricter than _overlapping: "prefers short answers" and "prefers
+    long answers" share a subject but are not the same fact heard twice."""
+    x, y = _content_words(a) - _FRAMING, _content_words(b) - _FRAMING
+    if not x or not y:
+        return a.strip().lower() == b.strip().lower()
+    return len(x & y) / max(len(x), len(y)) >= 0.75
+
+
+def _same_card(card: dict, category: str, text: str) -> bool:
+    if (card["category"] == "profile") != (category == "profile"):
+        return False
+    if category == "profile":
+        (k1, v1), (k2, v2) = card["text"].split(":", 1), text.split(":", 1)
+        return k1.strip() == k2.strip() and _same(v1, v2)
+    return _same(card["text"], text)
+
+
+def _quote(text: str, statements: list[str]) -> str:
+    """The user message ``text`` most likely came from, to show where it was heard."""
+    words = _content_words(text)
+    best = max(statements, key=lambda s: len(words & _content_words(s)), default="")
+    return best if words & _content_words(best) else ""
+
+
+def _promote(mem: Memory, card: dict) -> None:
+    if card["category"] == "profile":
+        key, value = card["text"].split(":", 1)
+        mem.profile[key.strip().lower()] = value.strip()
+    else:
+        _add_item(mem, card["category"], card["text"])
+
+
+def _hear(mem: Memory, cards: list[dict], category: str, text: str, session: str, said: str) -> str | None:
+    """Count a candidate fact as heard in ``session`` (once per session). Moves
+    it to persistent memory once heard in PROMOTE_AFTER sessions, and returns
+    the text saved then (the first wording heard)."""
+    if category == "profile":
+        if text.split(":", 1)[0].strip() in mem.profile:
+            return None
+    elif any(_same(x, text) for x in _known(mem)):
+        return None
+    card = next((c for c in cards if _same_card(c, category, text)), None)
+    if card is None:
+        card = {"id": uuid.uuid4().hex[:8], "category": category, "text": text, "heard": []}
+        cards.append(card)
+    if all(h["session"] != session for h in card["heard"]):
+        card["heard"].append({"session": session, "said": said})
+    if len(card["heard"]) < PROMOTE_AFTER:
+        return None
+    _promote(mem, card)
+    cards.remove(card)
+    return card["text"]
+
+
+def load_intermediate(memory_dir: Path) -> list[dict]:
+    return _read_json(memory_dir / "intermediate.json", {}).get("items", [])
+
+
+def load_questions(memory_dir: Path) -> list[dict]:
+    """Questions the user asked recently: {id, text, asked: [ISO times], examples}."""
+    return _read_json(memory_dir / "intermediate.json", {}).get("questions", [])
+
+
+def save_intermediate(memory_dir: Path, cards: list[dict], questions: list[dict] | None = None) -> None:
+    """Write the fact cards (and the tracked questions, or keep the ones on disk)."""
+    if questions is None:
+        questions = load_questions(memory_dir)
+    _write_json(memory_dir / "intermediate.json",
+                {"updated_at": datetime.now().isoformat(timespec="seconds"), "items": cards, "questions": questions})
+
+
+# ---- questions the user keeps asking ("likes to know") ---------------------------
+
+_QUESTION_START = re.compile(r"^(what|when|where|who|whose|why|how|which|is|are|am|was|were|do|does|did|can|"
+                             r"could|will|would|should|has|have)\b", re.IGNORECASE)
+
+
+def _questions_in(text: str) -> list[str]:
+    return [x for x in _sentences(text) if x.endswith("?") or _QUESTION_START.match(x)]
+
+
+class QuestionMatch(BaseModel):
+    n: int = Field(description="Number of the asked question in the list.")
+    standing: bool = Field(description="True if it is a standing question: its answer comes from the user's "
+                           "memory, today's date or their day (e.g. 'What day is it?', 'When is Leo's game?', "
+                           "'Where is Margaret?'). False for one-off requests, small talk and general knowledge.")
+    match: str = Field(default="", description="Id of the tracked or known question it asks again, or empty.")
+    canonical: str = Field(default="", description="Short neutral wording of the question, e.g. 'What day is it?'.")
+
+
+class QuestionPlan(BaseModel):
+    questions: list[QuestionMatch]
+
+
+def _track_questions(model, mem: Memory, questions: list[dict], asked: list[tuple[str, str]],
+                     now: datetime | None = None) -> list[str]:
+    """Count the questions asked this session (``asked``: (ISO time, question)).
+    One that has been asked QUESTION_PROMOTE_AFTER times within the last
+    QUESTION_WINDOW_DAYS moves to ``mem.likes_to_know``. Updates ``questions``
+    in place and returns the questions promoted."""
+    now = now or datetime.now()
+    cutoff = now - timedelta(days=QUESTION_WINDOW_DAYS)
+    for q in questions:
+        q["asked"] = [a for a in q["asked"] if datetime.fromisoformat(a) >= cutoff]
+    questions[:] = [q for q in questions if q["asked"]]
+    if not asked:
+        return []
+    known = {f"k{i}": text for i, text in enumerate(mem.likes_to_know)}
+    tracked = "\n".join(f"- {q['id']}: {q['text']}" for q in questions) or "(none)"
+    already = "\n".join(f"- {k}: {v}" for k, v in known.items()) or "(none)"
+    listing = "\n".join(f"{i}. {text}" for i, (_, text) in enumerate(asked, start=1))
+    plan = _structured(model, QuestionPlan, f"""A person with memory loss asked these questions in a chat.
+Find the standing questions and match repeats, so their answers can be prepared ahead of time.
+
+QUESTIONS ALREADY ANSWERED AHEAD OF TIME:
+{already}
+
+QUESTIONS ASKED RECENTLY:
+{tracked}
+
+ASKED IN THIS CHAT:
+{listing}
+
+For every question asked in this chat, return its number n, whether it is a standing question,
+the id of the question above it asks again (same meaning, even if worded differently) or empty,
+and a short neutral wording (canonical).""")
+    by_id = {q["id"]: q for q in questions}
+    for m in plan.questions:
+        if not m.standing or not 1 <= m.n <= len(asked) or m.match in known:
+            continue
+        at, said = asked[m.n - 1]
+        text = (m.canonical or said).strip()
+        if text.lower() in {x.lower() for x in mem.likes_to_know}:
+            continue
+        q = by_id.get(m.match) or next((x for x in questions if x["text"].lower() == text.lower()), None)
+        if q is None:
+            q = {"id": uuid.uuid4().hex[:8], "text": text, "asked": [], "examples": []}
+            questions.append(q)
+            by_id[q["id"]] = q
+        q["asked"].append(at)
+        if said not in q["examples"]:
+            q["examples"] = (q["examples"] + [said])[-5:]
+    promoted = [q for q in questions if len(q["asked"]) >= QUESTION_PROMOTE_AFTER]
+    for q in promoted:
+        mem.likes_to_know.append(q["text"])
+        questions.remove(q)
+    return [q["text"] for q in promoted]
+
+
+def save_persistent(memory_dir: Path, mem: Memory) -> None:
+    path = memory_dir / "persistent.json"
+    if path.exists():  # one-step undo if a merge goes wrong
+        shutil.copy(path, path.with_suffix(".prev.json"))
+    _write_json(path, {"updated_at": datetime.now().isoformat(timespec="seconds"), **mem.model_dump()})
+
+
+def settle_card(memory_dir: Path, card_id: str, keep: bool) -> list[dict]:
+    """The user's call on an intermediate fact: keep it now (move it to persistent
+    memory without waiting to hear it again) or forget it. Returns the cards left."""
+    cards = load_intermediate(memory_dir)
+    card = next((c for c in cards if c["id"] == card_id), None)
+    if card is None:
+        raise KeyError(card_id)
+    if keep:
+        data = _read_json(memory_dir / "persistent.json", {})
+        data.pop("updated_at", None)
+        mem = Memory(**data)
+        _promote(mem, card)
+        save_persistent(memory_dir, mem)
+    cards.remove(card)
+    save_intermediate(memory_dir, cards)
+    return cards
 
 
 class TopicGroup(BaseModel):
@@ -208,6 +438,25 @@ def _render_exchange(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _as_notes(text: str) -> str:
+    """Rewrite a rendered exchange as notes, not a chat transcript. Small models
+    shown "Assistant: ..." / "Tool call: ..." lines copy that format into their
+    reply, printing a tool call as text instead of making it."""
+    out, skipping = [], False
+    for line in text.splitlines():
+        if line.startswith(("Tool call:", "Tool result:")):
+            skipping = True
+        elif line.startswith("User: "):
+            skipping = False
+            out.append("- I said: " + line[len("User: "):])
+        elif line.startswith("Assistant: "):
+            skipping = False
+            out.append("- You replied: " + line[len("Assistant: "):])
+        elif not skipping:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _structured(model, output_model: type[BaseModel], prompt: str) -> BaseModel:
     """Ask the model for JSON matching ``output_model``.
 
@@ -247,6 +496,7 @@ class MemoryStore:
     def __init__(self, model, memory_dir: Path = MEMORY_DIR) -> None:
         self.model = model
         memory_dir.mkdir(exist_ok=True)
+        self.memory_dir = memory_dir
         self.session_path = memory_dir / "session.json"
         self.persistent_path = memory_dir / "persistent.json"
         # The agent may run several tool calls (e.g. two remembers) in parallel threads.
@@ -269,6 +519,9 @@ class MemoryStore:
             if items:
                 lines.append(f"{category.capitalize()}:")
                 lines += [f"  - {item}" for item in items]
+        if mem.likes_to_know:
+            lines.append("Likes to know (asks these often; always answer them warmly, as if for the first time):")
+            lines += [f"  - {q}" for q in mem.likes_to_know]
         if not lines:
             return "Long-term memory about the user: (empty)"
         return "Long-term memory about the user (from earlier sessions):\n" + "\n".join(lines)
@@ -280,11 +533,16 @@ class MemoryStore:
         return any(_mentions(message, item) for item in items)
 
     def screen_context(self) -> str:
-        """Persistent memory plus this session's notes, for the topic screen."""
-        notes = [f"  - {n['note']}" for n in getattr(self, "session", {}).get("notes", [])]
-        if not notes:
-            return self.persistent_prompt()
-        return self.persistent_prompt() + "\nNoted this session:\n" + "\n".join(notes)
+        """A short gist of persistent memory plus this session's notes, for the topic
+        screen. The screen runs on the CPU and its time grows with its input, and a
+        message that names a memory item skips it anyway (mentions_memory), so the
+        screen only needs who the user is and what they care about, not the details."""
+        mem = self.load_persistent()
+        notes = [n["note"] for n in getattr(self, "session", {}).get("notes", [])]
+        lines = [f"{k}: {_gist(str(v))}" for k, v in mem.profile.items() if k in SCREEN_PROFILE_KEYS]
+        lines += [_gist(item) for c in CATEGORIES[1:] for item in getattr(mem, c)]
+        lines += [_gist(note) for note in notes]
+        return "About the user:\n" + "\n".join(f"- {line}" for line in lines) if lines else ""
 
     def topic_index_prompt(self) -> str:
         """One line per offloaded topic, so the model knows what it can recall."""
@@ -302,7 +560,7 @@ class MemoryStore:
         the newest exchanges that fit."""
         t = self.session.get("topics", {})[name]
         head = f"Topic: {name}\nSummary: {t['summary']}"
-        exchanges = [e["text"] for e in t["exchanges"]]
+        exchanges = [_as_notes(e["text"]) for e in t["exchanges"]]
         if max_chars is not None:
             kept, size = [], len(head)
             for text in reversed(exchanges):
@@ -353,7 +611,8 @@ class MemoryStore:
 
     def add_turn(self, role: str, text: str) -> None:
         with self._lock:
-            self.session["transcript"].append({"role": role, "text": text})
+            self.session["transcript"].append({"role": role, "text": text,
+                                               "at": datetime.now().isoformat(timespec="seconds")})
         self._save_session()
 
     def add_note(self, category: str, note: str, replaces: str = "") -> None:
@@ -461,31 +720,43 @@ Every exchange number from 1 to {len(exchanges)} must appear in exactly one topi
     # ---- consolidation -----------------------------------------------------
 
     def end_session(self) -> None:
-        """Merge session memory into persistent memory, then clear the session."""
+        """Merge session memory into intermediate memory (and from there into
+        persistent memory, for facts heard often enough), then clear the session."""
         session = _read_json(self.session_path, {})
         if not session.get("notes") and not session.get("transcript"):
             self.session_path.unlink(missing_ok=True)
             return
 
-        merged = self.load_persistent()
-        _apply_notes(merged, session.get("notes", []))
+        merged, cards = self.load_persistent(), load_intermediate(self.memory_dir)
+        candidates = _apply_notes(merged, cards, session.get("notes", []))
         # Facts the agent didn't save with remember: extracted from the user's own
         # words only (assistant replies and the Bee data they quote are not facts
-        # about the user), added only if new and grounded in what the user said.
+        # about the user), kept only if new and grounded in what the user said.
         said = _statements([t["text"] for t in session.get("transcript", []) if t["role"] == "user"])
         # In chunks: given a long chat at once, small models pick out only a fact or two.
         for start in range(0, len(said), self.EXTRACT_CHUNK):
             chunk = said[start:start + self.EXTRACT_CHUNK]
             try:
-                added = _apply_update(merged, self._extract_update(merged, chunk), chunk)
-                if added:
-                    print("Added to long-term memory: " + "; ".join(added))
+                candidates += _candidates(merged, self._extract_update(merged, chunk), chunk)
             except Exception as exc:
                 print(f"(fact extraction failed: {exc}; saved notes only)")
 
-        if self.persistent_path.exists():  # one-step undo if a merge goes wrong
-            shutil.copy(self.persistent_path, self.persistent_path.with_suffix(".prev.json"))
-        _write_json(self.persistent_path, {"updated_at": datetime.now().isoformat(timespec="seconds"), **merged.model_dump()})
+        heard_in = session.get("started_at") or datetime.now().isoformat(timespec="seconds")
+        learned = [saved for category, text in candidates
+                   if (saved := _hear(merged, cards, category, text, heard_in, _quote(text, said)))]
+        if learned:
+            print("Added to long-term memory (heard again): " + "; ".join(learned))
+        questions = load_questions(self.memory_dir)
+        asked = [(t.get("at") or heard_in, q) for t in session.get("transcript", []) if t["role"] == "user"
+                 for q in _questions_in(t["text"])]
+        try:
+            promoted = _track_questions(self.model, merged, questions, asked)
+            if promoted:
+                print("Added to likes to know (asked often): " + "; ".join(promoted))
+        except Exception as exc:
+            print(f"(question tracking failed: {exc})")
+        save_persistent(self.memory_dir, merged)
+        save_intermediate(self.memory_dir, cards, questions)
         self.session_path.unlink(missing_ok=True)
 
     def _extract_update(self, current: Memory, said: list[str]) -> MemoryUpdate:

@@ -1,0 +1,1098 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Bee Mobile</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<script>
+  // ?embed=1: shown inside the desktop page (index.html), which supplies the menu.
+  if (new URLSearchParams(location.search).has("embed")) document.documentElement.classList.add("embed");
+</script>
+<style>
+  :root {
+    --bg: #fffdf8; --surface: #ffffff; --surface-2: #fff5d6; --border: #f1e3c2;
+    --text: #2b2118; --muted: #5e5244; --accent: #f4b73a; --accent-strong: #a8470f;
+    --accent-soft: #ffe8cf; --user-bg: #f39a4a; --user-text: #2b1708;
+    --ok: #3f7d4a; --warn: #a8470f; --err: #c0392b;
+    --shadow: 0 1px 2px rgba(120, 70, 10, .06), 0 4px 16px rgba(120, 70, 10, .06);
+    --desk: #fdf0d5;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  button, input, textarea, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* The phone: full screen on a phone, a framed device on a wide screen. */
+  .phone {
+    position: relative; height: 100dvh; display: flex; flex-direction: column;
+    background: var(--bg); overflow: hidden;
+  }
+  @media (min-width: 600px) {
+    body { background: var(--desk); display: grid; place-items: center; min-height: 100vh; padding: 24px 0; }
+    .phone {
+      width: 390px; height: min(844px, calc(100vh - 48px));
+      border-radius: 44px; border: 10px solid #1b1a17;
+      box-shadow: 0 30px 80px rgba(0,0,0,.35);
+    }
+    .phone::before { /* camera notch */
+      content: ""; position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+      width: 110px; height: 26px; border-radius: 14px; background: #1b1a17; z-index: 50;
+    }
+    .topbar { padding-top: 40px !important; }
+  }
+
+  .topbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+  }
+  .topbar h1 { flex: 1; margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+  .icon-btn {
+    border: none; background: none; width: 36px; height: 36px; border-radius: 10px;
+    display: grid; place-items: center; color: var(--muted);
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  .icon-btn svg { width: 20px; height: 20px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.ready { background: var(--ok); }
+  .dot.loading, .dot.busy { background: var(--accent); animation: pulse 1.2s infinite; }
+  .dot.error { background: var(--err); }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .view { flex: 1; overflow-y: auto; padding: 14px 16px 24px; display: none; }
+  .view.active { display: block; }
+  #view-chat.active { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+
+  .tabbar {
+    display: flex; background: var(--surface); border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tabbar button {
+    flex: 1; border: none; background: none; padding: 8px 0 10px; color: var(--muted);
+    display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; position: relative;
+  }
+  .tabbar button svg { width: 22px; height: 22px; }
+  .tabbar button.active { color: var(--accent-strong); font-weight: 600; }
+  .badge {
+    position: absolute; top: 4px; left: calc(50% + 6px); min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 8px; background: var(--err); color: #fff; font-size: 10px; line-height: 16px; font-weight: 700;
+  }
+
+  /* content */
+  h2.sec { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; display: flex; align-items: center; gap: 8px; }
+  h2.sec:first-child { margin-top: 2px; }
+  h2.sec .act { margin-left: auto; text-transform: none; letter-spacing: 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; box-shadow: var(--shadow);
+  }
+  .card + .card { margin-top: 8px; }
+  .card.tap { cursor: pointer; }
+  .card.tap:active { transform: scale(.99); }
+  .card.hero { background: var(--accent-soft); border-color: transparent; }
+  .card h3 { margin: 0 0 4px; font-size: 15.5px; line-height: 1.3; }
+  .small { font-size: 12.5px; color: var(--muted); }
+  .muted { color: var(--muted); }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .grow { flex: 1; min-width: 0; }
+  .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .clamp3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .greet { font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -.01em; }
+  .hscroll { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 0 -16px; padding: 2px 16px 8px; }
+  .hscroll .card { flex: 0 0 78%; scroll-snap-align: start; margin: 0 !important; }
+  .list { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .item { display: flex; align-items: flex-start; gap: 10px; padding: 11px 14px; border-top: 1px solid var(--border); }
+  .item:first-child { border-top: none; }
+  .item.tap { cursor: pointer; }
+  .item.tap:hover { background: var(--surface-2); }
+  .item .txt { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 2px 8px;
+    border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap;
+  }
+  .chip.accent { background: var(--accent-soft); color: var(--accent-strong); }
+  .chip.warn { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+  .chip.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+  .chip.err { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+  .none { padding: 14px; text-align: center; color: var(--muted); font-size: 13.5px; }
+  .btn {
+    border: 1px solid var(--border); background: var(--surface); padding: 8px 14px;
+    border-radius: 10px; font-size: 14px;
+  }
+  .btn:hover:not(:disabled) { background: var(--surface-2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1405; font-weight: 600; }
+  .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); }
+  .btn.danger { color: var(--err); }
+  .btn.alarm { background: #dc2626; border-color: #dc2626; color: #fff; font-weight: 600; }
+  .btn.alarm:hover:not(:disabled) { background: #b91c1c; }
+  .btn.sm { padding: 4px 10px; font-size: 12.5px; border-radius: 8px; }
+  .btn.block { width: 100%; }
+  .link { border: none; background: none; color: var(--accent-strong); padding: 0; font-size: 13px; font-weight: 600; }
+  .check {
+    flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border);
+    background: none; display: grid; place-items: center; margin-top: 1px; padding: 0;
+  }
+  .check.on { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .check svg { width: 13px; height: 13px; }
+  .done .txt { text-decoration: line-through; color: var(--muted); }
+  .seg { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; margin-bottom: 12px; }
+  .seg button { flex: 1; border: none; background: none; padding: 7px; border-radius: 8px; font-size: 13.5px; color: var(--muted); }
+  .seg button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+  .kv .k { color: var(--muted); }
+  .md p { margin: 0 0 8px; }
+  .md h4 { margin: 12px 0 4px; font-size: 14px; }
+  .md h4:first-child { margin-top: 0; }
+  .md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
+  .md code { background: var(--surface-2); padding: 1px 4px; border-radius: 4px; font-size: .9em; }
+
+  /* chat */
+  .msgs { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .msg { display: flex; flex-direction: column; max-width: 86%; }
+  .msg.user { align-self: flex-end; align-items: flex-end; }
+  .bubble { padding: 9px 13px; border-radius: 18px; background: var(--surface); border: 1px solid var(--border); overflow-wrap: anywhere; }
+  .bubble p { margin: 0 0 6px; } .bubble p:last-child { margin: 0; }
+  .bubble ul, .bubble ol { margin: 4px 0; padding-left: 18px; }
+  .msg.user .bubble { background: var(--user-bg); color: var(--user-text); border-color: transparent; border-bottom-right-radius: 6px; }
+  .msg.assistant .bubble { border-bottom-left-radius: 6px; }
+  .msg.error .bubble { color: var(--err); }
+  .msg.offtopic .bubble { color: var(--muted); font-style: italic; }
+  .meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .typing span { display: inline-block; width: 6px; height: 6px; margin: 0 2px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: .2s; } .typing span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  .suggest { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 10px; }
+  .suggest button { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 6px 12px; font-size: 13px; }
+  .composer { display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--surface); align-items: flex-end; }
+  .composer textarea {
+    flex: 1; resize: none; border: 1px solid var(--border); border-radius: 20px; padding: 9px 14px;
+    background: var(--bg); max-height: 120px; outline: none;
+  }
+  .composer textarea:focus { border-color: var(--accent); }
+  .send { width: 40px; height: 40px; border-radius: 50%; border: none; background: var(--accent); color: #1a1405; display: grid; place-items: center; flex: none; }
+  .send svg { width: 18px; height: 18px; }
+  .empty-chat { margin: auto; text-align: center; color: var(--muted); padding: 20px; }
+  .empty-chat .big { font-size: 40px; }
+
+  /* flash cards: intermediate memory, tap to flip */
+  .flash { flex: 0 0 78%; scroll-snap-align: start; perspective: 900px; height: 176px; cursor: pointer; }
+  .flash .inner { position: relative; height: 100%; transition: transform .45s ease; transform-style: preserve-3d; }
+  .flash.flipped .inner { transform: rotateY(180deg); }
+  .flash .face {
+    position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; overflow: hidden;
+  }
+  .flash .front { background: var(--accent-soft); border-color: transparent; }
+  .flash .back { background: var(--surface); transform: rotateY(180deg); }
+  .flash .fact { font-size: 16px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .flash .heard { flex: 1; overflow-y: auto; font-size: 13px; }
+  .flash .heard div + div { margin-top: 6px; }
+  .pips { display: flex; gap: 4px; }
+  .pips span { width: 18px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--accent-strong) 25%, transparent); }
+  .pips span.on { background: var(--accent-strong); }
+  .flash-empty { font-size: 13px; color: var(--muted); padding: 10px 14px; border: 1px dashed var(--border); border-radius: var(--radius); }
+  @media (prefers-reduced-motion: reduce) { .flash .inner { transition: none; } }
+
+  /* likes to know: questions asked often, answered ahead of time */
+  .ltk .q { font-size: 13px; color: var(--muted); }
+  .ltk .a { font-size: 18px; font-weight: 600; line-height: 1.35; margin-top: 4px; overflow-wrap: anywhere; }
+  .qrow .count { flex: none; }
+
+  /* transcript */
+  .utt { display: flex; gap: 8px; padding: 6px 0; }
+  .utt .who { font-size: 11.5px; font-weight: 600; color: var(--accent-strong); }
+  .utt.unknown .who { color: var(--muted); }
+  .utt .t { font-size: 11px; color: var(--muted); margin-left: 6px; font-weight: 400; }
+  mark { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 1px; }
+
+  /* overlays: full-screen pages and bottom sheets */
+  .page {
+    position: absolute; inset: 0; background: var(--bg); z-index: 20; display: flex; flex-direction: column;
+    transform: translateX(100%); transition: transform .22s ease;
+  }
+  .page.open { transform: none; }
+  .page .body { flex: 1; overflow-y: auto; padding: 14px 16px 24px; }
+  .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.4); z-index: 30; opacity: 0; transition: opacity .2s; }
+  .scrim.open { opacity: 1; }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 31; max-height: 88%; overflow-y: auto;
+    background: var(--surface); border-radius: 20px 20px 0 0; padding: 8px 18px calc(18px + env(safe-area-inset-bottom));
+    transform: translateY(100%); transition: transform .22s ease;
+  }
+  .sheet.open { transform: none; }
+  .sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--border); margin: 0 auto 12px; }
+  .sheet h3 { margin: 0 0 10px; font-size: 17px; }
+  .sheet pre { background: var(--surface-2); border-radius: 10px; padding: 10px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; }
+  .sheet .actions { display: flex; gap: 8px; margin-top: 14px; }
+  .sheet .actions .btn { flex: 1; padding: 11px; }
+  .field { display: block; margin-bottom: 12px; }
+  .field span { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  .field input, .field textarea, .field select {
+    width: 100%; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--bg); outline: none;
+  }
+  .field input:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); }
+  .field textarea { resize: vertical; min-height: 70px; }
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 12px; }
+  .searchbox { display: flex; gap: 8px; align-items: center; }
+  .searchbox input { flex: 1; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: var(--surface); outline: none; }
+  .searchbox input:focus { border-color: var(--accent); }
+
+  .toasts { position: absolute; left: 12px; right: 12px; top: 70px; z-index: 40; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+  @media (min-width: 600px) { .toasts { top: 90px; } }
+  .toast {
+    pointer-events: auto; background: var(--user-bg); color: var(--user-text); border-radius: 14px; padding: 11px 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25); font-size: 14px; display: flex; gap: 10px; align-items: center;
+    animation: drop .2s ease;
+  }
+  .toast.err { background: var(--err); color: #fff; }
+  .toast.alarm { background: var(--accent); color: #1a1405; }
+  .toast .btn { background: rgba(255,255,255,.85); border: none; color: #1a1405; }
+  @keyframes drop { from { transform: translateY(-10px); opacity: 0; } }
+  /* embedded in the desktop page: full width, no phone frame or tab bar */
+  html.embed body { background: var(--bg); display: block; padding: 0; min-height: 0; }
+  html.embed .phone { width: 100vw; height: 100vh; border: none; border-radius: 0; box-shadow: none; }
+  html.embed .phone::before { display: none; }
+  html.embed .topbar { padding: 10px max(16px, calc((100vw - 760px) / 2)) !important; }
+  html.embed .tabbar { display: none; }
+  html.embed .view, html.embed .page .body { padding-left: max(16px, calc((100vw - 760px) / 2)); padding-right: max(16px, calc((100vw - 760px) / 2)); }
+  html.embed .hscroll { margin: 0; padding: 2px 0 8px; }
+  html.embed .hscroll .card, html.embed .flash { flex-basis: 300px; }
+  html.embed .sheet { left: 50%; right: auto; width: min(560px, 100%); transform: translate(-50%, 100%); }
+  html.embed .sheet.open { transform: translate(-50%, 0); }
+  html.embed .toasts { left: auto; width: min(380px, calc(100% - 24px)); top: 64px; }
+  .spinner { width: 22px; height: 22px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin: 30px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="phone" id="phone">
+  <div class="topbar">
+    <h1 id="title">Highlights</h1>
+    <span id="top-actions"></span>
+    <button class="icon-btn" id="open-search" title="Search" aria-label="Search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    </button>
+  </div>
+
+  <section class="view active" id="view-home"><div class="spinner"></div></section>
+  <section class="view" id="view-chat">
+    <div class="msgs" id="msgs">
+      <div class="empty-chat" id="chat-empty">
+        <div class="big">🐝</div>
+        <p>Ask about your day, your conversations, or anything you've told me.</p>
+        <div class="suggest">
+          <button>What did I do today?</button>
+          <button>Summarize my last conversation</button>
+          <button>What are my open to-dos?</button>
+        </div>
+      </div>
+    </div>
+    <form class="composer" id="composer">
+      <textarea id="input" rows="1" placeholder="Message Bee…"></textarea>
+      <button class="send" id="send" type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+  </section>
+  <section class="view" id="view-convs"></section>
+  <section class="view" id="view-todos"></section>
+  <section class="view" id="view-profile"></section>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-tab="home" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.3 6L12 16.4 6.6 19.4l1.3-6L3.4 9.3l6-.7z"/></svg>Highlights</button>
+    <button data-tab="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/></svg>Chat</button>
+    <button data-tab="convs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v18M8 7v10M4 10v4M16 7v10M20 10v4"/></svg>Conversations</button>
+    <button data-tab="todos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg>To-dos<span class="badge" id="todo-badge" hidden></span></button>
+    <button data-tab="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4.5-6 8-6s7 2 8 6"/></svg>Profile</button>
+  </nav>
+
+  <div class="toasts" id="toasts"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const phone = $("phone");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const store = {  // browser storage can be blocked; nothing here is essential
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+// ---- formatting -------------------------------------------------------------
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+}
+// Small markdown subset: headings, paragraphs, bullet and numbered lists, bold, code.
+function md(text) {
+  const out = []; let listType = null;
+  const close = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
+  for (const raw of String(text || "").split("\n")) {
+    const line = raw.trim();
+    const ul = line.match(/^[-*•]\s+(.*)/), ol = line.match(/^\d+[.)]\s+(.*)/), h = line.match(/^#+\s+(.*)/);
+    if (ul || ol) {
+      const t = ul ? "ul" : "ol";
+      if (listType !== t) { close(); out.push(`<${t}>`); listType = t; }
+      out.push(`<li>${inline((ul || ol)[1])}</li>`);
+    } else if (!line) close();
+    else if (h) { close(); out.push(`<h4>${inline(h[1])}</h4>`); }
+    else { close(); out.push(`<p>${inline(line)}</p>`); }
+  }
+  close();
+  return `<div class="md">${out.join("")}</div>`;
+}
+const day = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+const time = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+const when = (ms) => {
+  const d = new Date(ms), now = new Date(), tmr = new Date(now); tmr.setDate(now.getDate() + 1);
+  if (d.toDateString() === now.toDateString()) return `Today ${time(ms)}`;
+  if (d.toDateString() === tmr.toDateString()) return `Tomorrow ${time(ms)}`;
+  return `${day(ms)} ${time(ms)}`;
+};
+const localInput = (ms) => { const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+const icons = {
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>`,
+  plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>`,
+  bell: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4"/></svg>`,
+  refresh: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>`,
+  newchat: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4zM12 8v5M9.5 10.5h5"/></svg>`,
+};
+
+// ---- api ----------------------------------------------------------------------
+async function api(path, { method, body } = {}) {
+  const opts = { method: method || (body === undefined ? "GET" : "POST") };
+  if (body !== undefined) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.statusText);
+  return data;
+}
+
+// ---- toasts, sheets, pages --------------------------------------------------------
+function toast(msg, cls = "", actions = [], ms = 3500) {
+  const el = document.createElement("div");
+  el.className = `toast ${cls}`;
+  el.innerHTML = `<span class="grow">${msg}</span>`;
+  for (const [label, fn] of actions) {
+    const b = document.createElement("button");
+    b.className = "btn sm"; b.textContent = label;
+    b.onclick = () => { el.remove(); fn(); };
+    el.appendChild(b);
+  }
+  $("toasts").appendChild(el);
+  if (ms) setTimeout(() => el.remove(), ms);
+  return el;
+}
+const fail = (e) => toast(esc(e.message || e), "err", [], 5000);
+
+let sheetCount = 0;
+function sheet(html, { onClose } = {}) {
+  const scrim = document.createElement("div"); scrim.className = "scrim";
+  const el = document.createElement("div"); el.className = "sheet";
+  el.innerHTML = `<div class="grab"></div>${html}`;
+  phone.append(scrim, el);
+  sheetCount++;
+  requestAnimationFrame(() => { scrim.classList.add("open"); el.classList.add("open"); });
+  let closed = false;
+  el.close = () => {
+    if (closed) return; closed = true; sheetCount--;
+    scrim.classList.remove("open"); el.classList.remove("open");
+    setTimeout(() => { scrim.remove(); el.remove(); }, 230);
+    onClose?.();
+  };
+  scrim.onclick = el.close;
+  el.querySelectorAll("[data-close]").forEach((b) => b.onclick = el.close);
+  return el;
+}
+
+// Every write to the Bee account or memory goes through this.
+// danger: true for a red-text button, "alarm" for a solid bright-red one.
+function areYouSure(title, detail, okLabel = "Yes, do it", danger = false) {
+  return new Promise((resolve) => {
+    let answer = false;
+    const s = sheet(`<h3>${esc(title)}</h3>${detail ? `<p class="muted" style="margin:0">${detail}</p>` : ""}
+      <div class="actions"><button class="btn" data-close>Cancel</button>
+      <button class="btn ${danger === "alarm" ? "alarm" : danger ? "danger" : "primary"}" id="sure-ok">${esc(okLabel)}</button></div>`,
+      { onClose: () => resolve(answer) });
+    s.querySelector("#sure-ok").onclick = () => { answer = true; s.close(); };
+  });
+}
+
+function page(title, bodyHtml, { actions = "" } = {}) {
+  const el = document.createElement("div"); el.className = "page";
+  el.innerHTML = `<div class="topbar"><button class="icon-btn" data-back aria-label="Back">${icons.back}</button>
+    <h1 style="font-size:17px">${esc(title)}</h1>${actions}</div><div class="body">${bodyHtml}</div>`;
+  phone.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("open"));
+  el.close = () => { el.classList.remove("open"); setTimeout(() => el.remove(), 230); };
+  el.querySelector("[data-back]").onclick = el.close;
+  return el;
+}
+
+// ---- tabs -------------------------------------------------------------------------
+const TITLES = { home: "Highlights", chat: "Chat", convs: "Conversations", todos: "To-dos", profile: "Profile" };
+const loaders = {};
+let tab = "home";
+const EMBED = document.documentElement.classList.contains("embed");
+const tellParent = (msg) => { if (EMBED) parent.postMessage(msg, location.origin); };
+function show(name) {
+  tellParent({ beeTab: name });
+  if (EMBED && name === "chat") return;  // the desktop page has its own chat
+  tab = name;
+  document.querySelectorAll("#tabbar button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
+  $("title").innerHTML = name === "chat" ? `Chat <span class="dot" id="dot"></span>` : TITLES[name];
+  $("top-actions").innerHTML = "";
+  if (name === "chat") {
+    $("top-actions").innerHTML = `<button class="icon-btn" id="end" title="Save & new session" aria-label="Save and start new session">${icons.newchat}</button>`;
+    $("end").onclick = endSession; refreshState();
+  } else {
+    $("top-actions").innerHTML = `<button class="icon-btn" id="reload" title="Refresh" aria-label="Refresh">${icons.refresh}</button>`;
+    $("reload").onclick = () => loaders[name](true);
+    loaders[name]?.();
+  }
+  if (!EMBED) store.set("bee-mobile-tab", name);
+}
+// The desktop page's menu switches tabs here without reloading the frame.
+addEventListener("message", (e) => {
+  if (e.origin !== location.origin) return;
+  if (e.data?.beeTab) show(e.data.beeTab);
+  if (e.data?.beeMemoryChanged) { profileData = null; delete $("view-convs").dataset.loaded; }
+});
+document.querySelectorAll("#tabbar button").forEach((b) => b.onclick = () => show(b.dataset.tab));
+
+// ---- highlights -----------------------------------------------------------------
+let todosCache = null;
+loaders.home = async (force) => {
+  const v = $("view-home");
+  if (force || !v.dataset.loaded) v.innerHTML = `<div class="spinner"></div>`;
+  try {
+    const [h] = await Promise.all([api("/api/m/highlights"), loadTodos()]);
+    v.dataset.loaded = "1";
+    const hour = new Date().getHours();
+    const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    const today = h.daily[0];
+    const soon = (todosCache?.todos || []).filter((t) => !t.completed && t.alarm_at && t.alarm_at > Date.now() - 3600e3 && t.alarm_at < Date.now() + 2 * 86400e3)
+      .sort((a, b) => a.alarm_at - b.alarm_at);
+    let html = `<p class="greet">${greet} 👋</p><p class="small" style="margin:2px 0 12px">${day(Date.now())}</p>`;
+    if (!EMBED) html += `<div id="ltk"></div>`;  // the web app shows these on its chat start screen
+    if (today) html += `<div class="card hero tap" data-daily="0"><div class="small">${day(today.date_time)} · Latest daily summary</div>
+      <h3 style="margin-top:4px">${esc(today.short_summary)}</h3><span class="link">Read more</span></div>`;
+    if (soon.length) html += `<h2 class="sec">Upcoming reminders</h2><div class="list">${soon.slice(0, 4).map((t) =>
+      `<div class="item tap" data-todo="${t.id}"><span>${icons.bell.replace("<svg", '<svg width="18" height="18" style="color:var(--accent-strong);flex:none;margin-top:2px"')}</span>
+       <div class="txt">${esc(t.text)}<div class="small">${when(t.alarm_at)}</div></div></div>`).join("")}</div>`;
+    if (h.insights.length) html += `<h2 class="sec">Insights</h2><div class="hscroll">${h.insights.map((i, n) =>
+      `<div class="card tap" data-insight="${n}"><div class="small">💡 Insight</div><h3 class="clamp3" style="margin-top:4px">${esc(i.title)}</h3>
+       <div class="small clamp2">${esc(i.description)}</div></div>`).join("")}</div>`;
+    if (h.actions.length) html += `<h2 class="sec">Action items</h2><div class="list">${h.actions.map((a, n) =>
+      `<div class="item"><div class="txt">${inline(a.text)}<div class="small clamp2">From: ${esc(a.title)}</div></div>
+       <button class="btn sm" data-action="${n}" title="Add as to-do">+ To-do</button></div>`).join("")}</div>`;
+    if (h.takeaways.length) {
+      const items = h.takeaways.map((t) => `<div class="item tap" data-conv="${t.conversation}"><div class="txt">${inline(t.text)}<div class="small clamp2">${esc(t.title)}</div></div></div>`);
+      html += `<h2 class="sec">Key takeaways</h2><div class="list" id="takeaways">${items.slice(0, 4).join("")}</div>`;
+      if (items.length > 4) html += `<div style="text-align:center;margin-top:8px"><button class="link" id="more-take">Show all ${items.length}</button></div>`;
+      v._takeaways = items;
+    }
+    html += `<h2 class="sec">Recent conversations <span class="act"><button class="link" data-goto="convs">See all</button></span></h2>`;
+    html += h.conversations.slice(0, 5).map(convCard).join("") || `<div class="none">No conversations yet</div>`;
+    if (h.daily.length > 1) html += `<h2 class="sec">Earlier days</h2><div class="list">${h.daily.slice(1).map((d, n) =>
+      `<div class="item tap" data-daily="${n + 1}"><div class="txt"><div class="small">${day(d.date_time)}</div>${esc(d.short_summary)}</div></div>`).join("")}</div>`;
+    v.innerHTML = html;
+    loadLikesToKnow(false);
+
+    v.querySelectorAll("[data-daily]").forEach((el) => el.onclick = () => {
+      const d = h.daily[+el.dataset.daily];
+      sheet(`<div class="small">${day(d.date_time)}</div><h3>${esc(d.short_summary)}</h3>${md(d.summary)}<div class="actions"><button class="btn" data-close>Close</button></div>`);
+    });
+    v.querySelectorAll("[data-insight]").forEach((el) => el.onclick = () => {
+      const i = h.insights[+el.dataset.insight];
+      sheet(`<div class="small">💡 Insight</div><h3>${esc(i.title)}</h3>${md(i.description)}<div class="actions"><button class="btn" data-close>Close</button></div>`);
+    });
+    v.querySelectorAll("[data-action]").forEach((el) => el.onclick = () => todoForm({ text: h.actions[+el.dataset.action].text.replace(/\*\*/g, "") }));
+    v.querySelectorAll("[data-todo]").forEach((el) => el.onclick = () => todoForm(todosCache.todos.find((t) => t.id == el.dataset.todo)));
+    v.querySelectorAll("[data-goto]").forEach((el) => el.onclick = () => show(el.dataset.goto));
+    bindConvCards(v);
+    const more = $("more-take");
+    if (more) more.onclick = () => { $("takeaways").innerHTML = v._takeaways.join(""); bindConvCards($("takeaways")); more.remove(); };
+  } catch (e) {
+    v.innerHTML = `<div class="none">Couldn't load highlights.<br>${esc(e.message)}</div>`;
+  }
+};
+
+// Questions the user asks again and again, with answers prepared once a day.
+async function loadLikesToKnow(refresh) {
+  const box = $("ltk");
+  if (!box) return;
+  if (refresh) box.innerHTML = `<h2 class="sec">You like to know</h2><div class="spinner"></div>`;
+  let data;
+  try { data = await api(`/api/m/likes-to-know${refresh ? "?refresh=true" : ""}`); }
+  catch (e) { box.innerHTML = refresh ? `<h2 class="sec">You like to know</h2><div class="none">Couldn't prepare answers. ${esc(e.message)}</div>` : ""; return; }
+  if (!$("ltk")) return;
+  if (!data.items.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<h2 class="sec">You like to know <span class="act"><button class="link" id="ltk-refresh">Refresh</button></span></h2>` +
+    data.items.map((i) => `<div class="card ltk"><div class="q">${esc(i.question)}</div><div class="a">${esc(i.answer || "…")}</div></div>`).join("");
+  $("ltk-refresh").onclick = () => loadLikesToKnow(true);
+}
+
+// ---- conversations ------------------------------------------------------------------
+function convCard(c) {
+  const live = c.state === "CAPTURING" ? ` <span class="chip accent">● Live</span>` : "";
+  return `<div class="card tap" data-conv="${c.id}"><div class="row small"><span class="grow">${day(c.start_time)} · ${time(c.start_time)}${c.end_time ? "–" + time(c.end_time) : ""}</span>${live}</div>
+    <h3 class="clamp2" style="margin-top:4px">${esc(c.short_summary || "Untitled conversation")}</h3>
+    <div class="small">${c.utterances_count ?? "?"} utterances</div></div>`;
+}
+function bindConvCards(root) {
+  root.querySelectorAll("[data-conv]").forEach((el) => el.onclick = () => openConversation(el.dataset.conv));
+}
+let convCursor = null;
+loaders.convs = async (force) => {
+  const v = $("view-convs");
+  if (v.dataset.loaded && !force) return;
+  v.innerHTML = `<div id="learning"></div><h2 class="sec">Conversations</h2><div id="conv-box"><div class="spinner"></div></div>`;
+  loadLearning();
+  const box = $("conv-box");
+  try {
+    const page1 = await api("/api/m/conversations");
+    v.dataset.loaded = "1";
+    convCursor = page1.next_cursor;
+    box.innerHTML = `<div id="conv-list">${page1.conversations.map(convCard).join("") || `<div class="none">No conversations yet</div>`}</div>
+      <div style="text-align:center;margin-top:12px"><button class="btn" id="conv-more" ${convCursor ? "" : "hidden"}>Load more</button></div>`;
+    bindConvCards(box);
+    $("conv-more").onclick = async () => {
+      const b = $("conv-more"); b.disabled = true; b.textContent = "Loading…";
+      try {
+        const next = await api(`/api/m/conversations?cursor=${encodeURIComponent(convCursor)}`);
+        convCursor = next.next_cursor;
+        const more = document.createElement("div"); more.innerHTML = next.conversations.map(convCard).join("");
+        bindConvCards(more); $("conv-list").append(...more.children);
+        b.hidden = !convCursor;
+      } catch (e) { fail(e); }
+      b.disabled = false; b.textContent = "Load more";
+    };
+  } catch (e) {
+    box.innerHTML = `<div class="none">Couldn't load conversations.<br>${esc(e.message)}</div>`;
+  }
+};
+
+// Intermediate memory: facts heard in chat, kept here until heard again in another session.
+async function loadLearning() {
+  const box = $("learning");
+  if (!box) return;
+  let data;
+  try { data = await api("/api/m/learning"); }
+  catch (e) { box.innerHTML = `<h2 class="sec">Learning about you</h2><div class="none">Couldn't load. ${esc(e.message)}</div>`; return; }
+  const { items, promote_after: need } = data;
+  const qs = data.questions || [], qNeed = data.question_promote_after, qDays = data.question_window_days;
+  const qHtml = qs.length ? `<h2 class="sec">Questions you ask <span class="chip">${qs.length}</span></h2>
+    <p class="small" style="margin:0 0 8px">Asked ${qNeed} times within ${qDays} days, a question moves to "Likes to know" and its answer shows on the home page.</p>
+    <div class="list">${qs.map((q) => `<div class="item qrow"><div class="txt">${esc(q.text)}
+      ${q.examples?.length ? `<div class="small clamp2">“${esc(q.examples.at(-1))}”</div>` : ""}</div>
+      <span class="chip accent count">${q.asked.length} of ${qNeed}</span></div>`).join("")}</div>` : "";
+  const head = `<h2 class="sec">Learning about you${items.length ? ` <span class="chip">${items.length}</span>` : ""}</h2>`;
+  if (!items.length) {
+    box.innerHTML = head + `<div class="flash-empty">Things you tell Bee in chat show up here. Once you mention one again in another session, it moves to long-term memory.</div>` + qHtml;
+    return;
+  }
+  const latest = (c) => c.heard.at(-1)?.session || "";
+  items.sort((a, b) => latest(b).localeCompare(latest(a)));
+  box.innerHTML = head + `<div class="hscroll">${items.map((c) => {
+    const n = c.heard.length;
+    const pips = Array.from({ length: need }, (_, i) => `<span class="${i < n ? "on" : ""}"></span>`).join("");
+    const heard = c.heard.map((h) => {
+      const at = Date.parse(h.session);
+      return `<div><span class="small">${isNaN(at) ? "Chat" : `Chat · ${day(at)}`}</span><div class="clamp2">${h.said ? `“${esc(h.said)}”` : `<span class="muted">Saved by the assistant</span>`}</div></div>`;
+    }).join("");
+    return `<div class="flash" data-card="${esc(c.id)}" role="button" tabindex="0" aria-label="${esc(c.text)}, heard ${n} of ${need} times. Tap to flip.">
+      <div class="inner">
+        <div class="face front">
+          <div class="row"><span class="chip accent">${esc(cap(c.category))}</span><span class="small grow" style="text-align:right">Tap to flip</span></div>
+          <div class="fact grow">${esc(c.text)}</div>
+          <div class="row small"><div class="pips">${pips}</div><span>Heard ${n} of ${need}</span></div>
+        </div>
+        <div class="face back">
+          <div class="small" style="font-weight:600">Where Bee heard this</div>
+          <div class="heard">${heard}</div>
+          <div class="row"><button class="btn sm danger" data-forget>Forget</button><span class="grow"></span><button class="btn sm primary" data-keep>Remember now</button></div>
+        </div>
+      </div></div>`;
+  }).join("")}</div>` + qHtml;
+  box.querySelectorAll(".flash").forEach((el) => {
+    const card = items.find((c) => c.id === el.dataset.card);
+    el.onclick = () => el.classList.toggle("flipped");
+    el.onkeydown = (e) => { if (e.target === el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); el.classList.toggle("flipped"); } };
+    el.querySelector("[data-keep]").onclick = (e) => { e.stopPropagation(); settleCard(card, true); };
+    el.querySelector("[data-forget]").onclick = (e) => { e.stopPropagation(); settleCard(card, false); };
+  });
+}
+
+async function settleCard(card, keep) {
+  const ok = await areYouSure(keep ? "Add this to long-term memory now?" : "Forget this?", `“${esc(card.text)}”`,
+    keep ? "Remember now" : "Forget", !keep);
+  if (!ok) return;
+  try {
+    await api(`/api/m/learning/${encodeURIComponent(card.id)}`, { body: { keep } });
+    toast(keep ? "Added to long-term memory" : "Forgotten");
+    if (keep) profileData = null;
+    loadLearning();
+  } catch (e) { fail(e); }
+}
+
+async function openConversation(id, highlight = "") {
+  const p = page("Conversation", `<div class="spinner"></div>`);
+  try {
+    const { conversation: c, transcript } = await api(`/api/m/conversations/${id}`);
+    const body = p.querySelector(".body");
+    body.innerHTML = `<div class="small">${day(c.start_time)} · ${time(c.start_time)}${c.end_time ? "–" + time(c.end_time) : " · still capturing"}</div>
+      <h3 style="margin:4px 0 12px;font-size:18px">${esc(c.short_summary || "Untitled conversation")}</h3>
+      ${c.summary ? `<div class="card">${md(c.summary)}</div>` : ""}
+      <h2 class="sec">Transcript · ${transcript.length} lines</h2>
+      <div class="searchbox" style="margin-bottom:8px"><input id="tfilter" type="search" placeholder="Find in transcript" value="${esc(highlight)}"></div>
+      <div class="card" id="tlines"></div>`;
+    const draw = () => {
+      const q = body.querySelector("#tfilter").value.trim().toLowerCase();
+      const rows = transcript.filter((u) => !q || (u.text || "").toLowerCase().includes(q));
+      const pattern = q && new RegExp(esc(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+      const mark = (s) => q ? esc(s).replace(pattern, (m) => `<mark>${m}</mark>`) : esc(s);
+      body.querySelector("#tlines").innerHTML = rows.map((u) => {
+        const who = u.speaker || "Unknown";
+        return `<div class="utt ${who === "Unknown" ? "unknown" : ""}"><div class="grow"><div class="who">${esc(who)}<span class="t">${u.spoken_at ? time(u.spoken_at) : ""}</span></div>${mark(u.text || "")}</div></div>`;
+      }).join("") || `<div class="none">${q ? "No lines match" : "No transcript"}</div>`;
+    };
+    body.querySelector("#tfilter").oninput = draw;
+    draw();
+  } catch (e) {
+    p.querySelector(".body").innerHTML = `<div class="none">Couldn't load this conversation.<br>${esc(e.message)}</div>`;
+  }
+}
+
+// ---- to-dos and reminders --------------------------------------------------------------
+async function loadTodos(force) {
+  if (!todosCache || force) {
+    todosCache = await api("/api/m/todos");
+    updateBadge();
+  }
+  return todosCache;
+}
+function updateBadge() {
+  const due = (todosCache?.todos || []).filter((t) => !t.completed && t.alarm_at && t.alarm_at <= Date.now()).length;
+  $("todo-badge").hidden = !due; $("todo-badge").textContent = due;
+  tellParent({ beeBadge: due });
+}
+
+loaders.todos = async (force) => {
+  const v = $("view-todos");
+  if (!todosCache || force) v.innerHTML = `<div class="spinner"></div>`;
+  try {
+    const { todos, suggestions } = await loadTodos(force);
+    const open = todos.filter((t) => !t.completed), done = todos.filter((t) => t.completed);
+    open.sort((a, b) => (a.alarm_at || Infinity) - (b.alarm_at || Infinity) || b.created_at - a.created_at);
+    const notif = "Notification" in window ? Notification.permission : "unsupported";
+    let html = `<div class="row" style="margin-bottom:4px"><button class="btn primary grow" id="todo-new">${icons.plus.replace("<svg", '<svg width="16" height="16" style="vertical-align:-3px"')} New to-do</button>
+      ${notif === "default" ? `<button class="btn" id="notif">${icons.bell.replace("<svg", '<svg width="16" height="16" style="vertical-align:-3px"')} Alerts</button>` : ""}</div>`;
+    if (notif === "denied") html += `<p class="small">Browser notifications are blocked; reminders still pop up inside the app while it's open.</p>`;
+    html += `<h2 class="sec">Open · ${open.length}</h2>`;
+    html += open.length ? `<div class="list">${open.map(todoRow).join("")}</div>` : `<div class="none">Nothing open 🎉</div>`;
+    if (suggestions.length) {
+      const shown = v._allSugg ? suggestions : suggestions.slice(0, 2);
+      html += `<h2 class="sec">Suggested by Bee · ${suggestions.length}${suggestions.length > 2 ? ` <span class="act"><button class="link" id="all-sugg">${v._allSugg ? "Show fewer" : "Show all"}</button></span>` : ""}</h2>
+        <div class="list">${shown.map((s) =>
+      `<div class="item"><span style="font-size:18px">${esc(s.emoji || "💡")}</span><div class="txt">${esc(s.text)}
+        ${s.details ? `<div class="small clamp2">${esc(s.details)}</div>` : ""}
+        <div class="row" style="margin-top:6px"><button class="btn sm primary" data-accept="${s.id}">Accept</button><button class="btn sm" data-dismiss="${s.id}">Dismiss</button></div></div></div>`).join("")}</div>`;
+    }
+    if (done.length) html += `<h2 class="sec">Completed · ${done.length} <span class="act"><button class="link" id="show-done">${v._showDone ? "Hide" : "Show"}</button></span></h2>
+      ${v._showDone ? `<div class="list">${done.map(todoRow).join("")}</div>` : ""}`;
+    v.innerHTML = html;
+
+    $("todo-new").onclick = () => todoForm();
+    if ($("notif")) $("notif").onclick = async () => { await Notification.requestPermission(); loaders.todos(); };
+    if ($("all-sugg")) $("all-sugg").onclick = () => { v._allSugg = !v._allSugg; loaders.todos(); };
+    if ($("show-done")) $("show-done").onclick = () => { v._showDone = !v._showDone; loaders.todos(); };
+    v.querySelectorAll("[data-edit]").forEach((el) => el.onclick = () => todoForm(todos.find((t) => t.id == el.dataset.edit)));
+    v.querySelectorAll("[data-toggle]").forEach((el) => el.onclick = (e) => { e.stopPropagation(); toggleTodo(todos.find((t) => t.id == el.dataset.toggle)); });
+    v.querySelectorAll("[data-accept],[data-dismiss]").forEach((el) => el.onclick = async () => {
+      const accept = !!el.dataset.accept, id = el.dataset.accept || el.dataset.dismiss;
+      const s = suggestions.find((x) => x.id == id);
+      if (!await areYouSure(accept ? "Add this to your Bee to-dos?" : "Dismiss this suggestion?", esc(s.text), accept ? "Accept" : "Dismiss")) return;
+      try { await api(`/api/m/suggestions/${id}`, { body: { accept } }); toast(accept ? "Added to your to-dos" : "Suggestion dismissed"); await loadTodos(true); loaders.todos(); }
+      catch (e) { fail(e); }
+    });
+  } catch (e) {
+    v.innerHTML = `<div class="none">Couldn't load to-dos.<br>${esc(e.message)}</div>`;
+  }
+};
+
+function todoRow(t) {
+  const overdue = !t.completed && t.alarm_at && t.alarm_at <= Date.now();
+  const alarm = t.alarm_at ? `<span class="chip ${overdue ? "err" : "accent"}">${icons.bell.replace("<svg", '<svg width="11" height="11"')} ${when(t.alarm_at)}</span>` : "";
+  return `<div class="item tap ${t.completed ? "done" : ""}" data-edit="${t.id}">
+    <button class="check ${t.completed ? "on" : ""}" data-toggle="${t.id}" aria-label="${t.completed ? "Mark not done" : "Mark done"}">${t.completed ? icons.check : ""}</button>
+    <div class="txt">${esc(t.text)}${alarm ? `<div style="margin-top:4px">${alarm}</div>` : ""}</div></div>`;
+}
+
+async function toggleTodo(t) {
+  const completed = !t.completed;
+  if (!await areYouSure(completed ? "Mark this to-do done?" : "Reopen this to-do?", esc(t.text), completed ? "Mark done" : "Reopen")) return;
+  try {
+    await api(`/api/m/todos/${t.id}`, { method: "PATCH", body: { completed } });
+    toast(completed ? "Marked done ✓" : "Reopened");
+    await loadTodos(true); refreshCurrent();
+  } catch (e) { fail(e); }
+}
+
+function todoForm(t = {}) {
+  const editing = !!t.id;
+  const s = sheet(`<h3>${editing ? "Edit to-do" : "New to-do"}</h3>
+    <label class="field"><span>To-do</span><textarea id="tf-text" rows="2" placeholder="What do you need to do?">${esc(t.text || "")}</textarea></label>
+    <label class="toggle"><input type="checkbox" id="tf-remind" ${t.alarm_at ? "checked" : ""}> Remind me</label>
+    <label class="field" id="tf-when-wrap" ${t.alarm_at ? "" : "hidden"}><span>When</span><input type="datetime-local" id="tf-when"
+      value="${localInput(t.alarm_at || Date.now() + 3600e3)}"></label>
+    <p class="small" style="margin:0">Saved to your Bee account, so it also appears in the Bee phone app.</p>
+    <div class="actions">${editing ? `<button class="btn danger" id="tf-del">Delete</button>` : `<button class="btn" data-close>Cancel</button>`}
+      <button class="btn primary" id="tf-save">${editing ? "Save" : "Add"}</button></div>`);
+  const remind = s.querySelector("#tf-remind");
+  remind.onchange = () => s.querySelector("#tf-when-wrap").hidden = !remind.checked;
+  setTimeout(() => s.querySelector("#tf-text").focus(), 250);
+  s.querySelector("#tf-save").onclick = async () => {
+    const text = s.querySelector("#tf-text").value.trim();
+    if (!text) return toast("Write the to-do first", "err");
+    const whenVal = s.querySelector("#tf-when").value;
+    const alarm = remind.checked && whenVal ? new Date(whenVal) : null;
+    const detail = `${esc(text)}${alarm ? `<br>Reminder: ${when(alarm.getTime())}` : editing && t.alarm_at ? "<br>Reminder removed" : ""}`;
+    if (!await areYouSure(editing ? "Save changes to this Bee to-do?" : "Add this to your Bee to-dos?", detail, editing ? "Save" : "Add")) return;
+    try {
+      if (editing) await api(`/api/m/todos/${t.id}`, { method: "PATCH", body: { text, alarm_at: alarm?.toISOString() ?? null, clear_alarm: !alarm && !!t.alarm_at } });
+      else await api("/api/m/todos", { body: { text, alarm_at: alarm?.toISOString() ?? null } });
+      s.close(); toast(editing ? "To-do saved" : "To-do added");
+      await loadTodos(true); refreshCurrent();
+    } catch (e) { fail(e); }
+  };
+  const del = s.querySelector("#tf-del");
+  if (del) del.onclick = async () => {
+    if (!await areYouSure("Delete this to-do?", `${esc(t.text)}<br>This removes it from your Bee account.`, "Delete", true)) return;
+    try { await api(`/api/m/todos/${t.id}`, { method: "DELETE" }); s.close(); toast("To-do deleted"); await loadTodos(true); refreshCurrent(); }
+    catch (e) { fail(e); }
+  };
+}
+
+// Reminder alerts: check every 15 s; refresh the list from Bee every 2 min.
+// A reminder fires once (remembered per browser) if it fell due in the last 10 minutes.
+const alerted = new Set(store.get("bee-alerted", []));
+function checkReminders() {
+  if (!todosCache) return;
+  const now = Date.now();
+  for (const t of todosCache.todos) {
+    const key = `${t.id}:${t.alarm_at}`;
+    if (t.completed || !t.alarm_at || t.alarm_at > now || now - t.alarm_at > 10 * 60e3 || alerted.has(key)) continue;
+    alerted.add(key); store.set("bee-alerted", [...alerted].slice(-200));
+    toast(`⏰ <strong>Reminder</strong><br>${esc(t.text)}`, "alarm", [
+      ["Done", () => toggleTodo(t)],
+      ["Open", () => { show("todos"); todoForm(t); }],
+    ], 0);
+    navigator.vibrate?.([200, 100, 200]);
+    if ("Notification" in window && Notification.permission === "granted") {
+      try { new Notification("Bee reminder", { body: t.text, tag: key }); } catch {}
+    }
+  }
+  updateBadge();
+}
+setInterval(checkReminders, 15e3);
+setInterval(async () => { try { await loadTodos(true); checkReminders(); } catch {} }, 120e3);
+
+// ---- profile -------------------------------------------------------------------------
+const CATS = ["preferences", "people", "routines", "facts", "likes_to_know"];
+const cap = (s) => s === "likes_to_know" ? "Likes to know" : s[0].toUpperCase() + s.slice(1);
+let profileData = null;
+loaders.profile = async (force) => {
+  const v = $("view-profile");
+  if (!profileData || force) {
+    v.innerHTML = `<div class="spinner"></div>`;
+    try { profileData = await api("/api/m/profile"); }
+    catch (e) { v.innerHTML = `<div class="none">Couldn't load profile.<br>${esc(e.message)}</div>`; return; }
+  }
+  const segment = v._seg || "memory";
+  let html = `<div class="seg"><button data-seg="memory" class="${segment === "memory" ? "on" : ""}">Assistant memory</button>
+    <button data-seg="facts" class="${segment === "facts" ? "on" : ""}">Bee facts · ${profileData.facts.length}</button></div>`;
+  if (segment === "memory") {
+    const m = profileData.memory || {};
+    const prof = Object.entries(m.profile || {});
+    html += `<p class="small" style="margin:0 0 4px">What the assistant knows about you. Edits apply from your next chat message.
+      ${m.updated_at ? `Updated ${new Date(m.updated_at).toLocaleString()}.` : ""}</p>`;
+    html += `<h2 class="sec">Profile <span class="act"><button class="link" data-add="profile">+ Add</button></span></h2>`;
+    html += prof.length ? `<div class="list">${prof.map(([k, val]) =>
+      `<div class="item tap kv" data-mem="profile" data-old="${esc(k)}"><div class="txt"><span class="k">${esc(k)}</span><br>${esc(val)}</div></div>`).join("")}</div>`
+      : `<div class="list"><div class="none">Nothing yet</div></div>`;
+    for (const c of CATS) {
+      const items = m[c] || [];
+      html += `<h2 class="sec">${cap(c)} <span class="chip">${items.length}</span><span class="act"><button class="link" data-add="${c}">+ Add</button></span></h2>`;
+      html += items.length ? `<div class="list">${items.map((x) => `<div class="item tap" data-mem="${c}" data-old="${esc(x)}"><div class="txt">${esc(x)}</div></div>`).join("")}</div>`
+        : `<div class="list"><div class="none">Nothing yet</div></div>`;
+    }
+    html += `<h2 class="sec">Your data</h2><div class="card">
+      <p style="margin:0 0 10px">Delete everything the assistant has stored on this computer: its memory of you, things it is still learning, all chat logs, and the saved copies of your Bee conversations. Conversations still in your Bee account are copied again.</p>
+      <button class="btn alarm block" id="delete-data">Delete my data</button></div>`;
+  } else {
+    const f = profileData.facts;
+    const unconfirmed = f.filter((x) => !x.confirmed);
+    html += `<p class="small" style="margin:0 0 8px">Facts Bee learned from your conversations, stored in your Bee account.</p>
+      <button class="btn primary block" data-addfact>${icons.plus.replace("<svg", '<svg width="16" height="16" style="vertical-align:-3px"')} Add fact</button>`;
+    if (unconfirmed.length) html += `<h2 class="sec">Needs review · ${unconfirmed.length}</h2><div class="list">${unconfirmed.map(factRow).join("")}</div>`;
+    html += `<h2 class="sec">Confirmed · ${f.length - unconfirmed.length}</h2><div class="list">${f.filter((x) => x.confirmed).map(factRow).join("") || `<div class="none">None yet</div>`}</div>`;
+  }
+  v.innerHTML = html;
+  v.querySelectorAll("[data-seg]").forEach((b) => b.onclick = () => { v._seg = b.dataset.seg; loaders.profile(); });
+  v.querySelectorAll("[data-add]").forEach((b) => b.onclick = () => memoryForm(b.dataset.add));
+  v.querySelectorAll("[data-mem]").forEach((el) => el.onclick = () => memoryForm(el.dataset.mem, el.dataset.old));
+  v.querySelectorAll("[data-fact]").forEach((el) => el.onclick = () => factForm(profileData.facts.find((x) => x.id == el.dataset.fact)));
+  v.querySelector("[data-addfact]")?.addEventListener("click", () => factForm());
+  $("delete-data")?.addEventListener("click", deleteMyData);
+};
+
+async function deleteMyData() {
+  const ok = await areYouSure("Delete all your data?",
+    `This permanently deletes, from this computer:<br>• the assistant's memory of you (profile, people, routines…)<br>
+     • facts it is still learning<br>• the current chat and all chat logs<br><br>
+     It can't be undone. Your Bee account (conversations, to-dos, Bee facts) is not changed; delete those in the Bee app.`,
+    "Delete everything", "alarm");
+  if (!ok) return;
+  const t = toast("Deleting your data…", "", [], 0);
+  try {
+    const start = await api("/api/data/delete", { body: {} });
+    const job = await follow(start.id, null);
+    if (job.status === "error") throw new Error(job.error);
+    dataDeleted();
+    tellParent({ beeDataDeleted: true });
+    toast(esc(job.reply || "Your data was deleted"));
+  } catch (e) { fail(e); }
+  finally { t.remove(); }
+}
+
+// Forget everything shown from the old data: chat, memory, learning cards.
+function dataDeleted() {
+  msgs.innerHTML = "";
+  addMessage("assistant", "Your data was deleted. Starting fresh.");
+  profileData = null;
+  delete $("view-convs").dataset.loaded;
+  if (tab === "profile") loaders.profile();
+  refreshState();
+}
+
+function factRow(f) {
+  const tags = (f.tags || []).map((t) => `<span class="chip">${esc(t)}</span>`).join(" ");
+  return `<div class="item tap" data-fact="${f.id}"><div class="txt">${esc(f.text)}${tags ? `<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">${tags}</div>` : ""}</div>
+    ${f.confirmed ? "" : `<span class="chip warn">Review</span>`}</div>`;
+}
+
+function memoryForm(category, old) {
+  const editing = old !== undefined;
+  const isProfile = category === "profile";
+  const current = isProfile && editing ? profileData.memory.profile[old] : old;
+  const s = sheet(`<h3>${editing ? "Edit" : "Add to"} ${cap(category)}</h3>
+    ${isProfile ? `<label class="field"><span>Name (e.g. city, job)</span><input id="mf-key" value="${esc(editing ? old : "")}"></label>` : ""}
+    <label class="field"><span>${isProfile ? "Value" : "Entry"}</span><textarea id="mf-val" rows="2">${esc(editing ? current : "")}</textarea></label>
+    <div class="actions">${editing ? `<button class="btn danger" id="mf-del">Delete</button>` : `<button class="btn" data-close>Cancel</button>`}
+      <button class="btn primary" id="mf-save">${editing ? "Save" : "Add"}</button></div>`);
+  setTimeout(() => s.querySelector(isProfile && !editing ? "#mf-key" : "#mf-val").focus(), 250);
+  const send = async (action, detail, okLabel, danger) => {
+    if (!await areYouSure(action === "delete" ? "Delete this from memory?" : action === "edit" ? "Save this change to memory?" : "Add this to memory?", detail, okLabel, danger)) return;
+    const body = { category, action, old: old ?? "", key: s.querySelector("#mf-key")?.value || "", value: s.querySelector("#mf-val").value };
+    try { profileData.memory = await api("/api/m/memory", { body }); s.close(); toast("Memory updated"); loaders.profile(); }
+    catch (e) { fail(e); }
+  };
+  s.querySelector("#mf-save").onclick = () => {
+    const val = s.querySelector("#mf-val").value.trim(), key = s.querySelector("#mf-key")?.value.trim();
+    if (!val || (isProfile && !key)) return toast("Fill in every field", "err");
+    send(editing ? "edit" : "add", esc(isProfile ? `${key}: ${val}` : val), editing ? "Save" : "Add");
+  };
+  s.querySelector("#mf-del")?.addEventListener("click", () => send("delete", esc(isProfile ? `${old}: ${current}` : old), "Delete", true));
+}
+
+function factForm(f) {
+  const editing = !!f;
+  const s = sheet(`<h3>${editing ? "Edit Bee fact" : "Add Bee fact"}</h3>
+    <label class="field"><span>Fact</span><textarea id="ff-text" rows="3">${esc(f?.text || "")}</textarea></label>
+    ${editing ? `<label class="toggle"><input type="checkbox" id="ff-conf" ${f.confirmed ? "checked" : ""}> Confirmed</label>` : ""}
+    <div class="actions">${editing ? `<button class="btn danger" id="ff-del">Delete</button>` : `<button class="btn" data-close>Cancel</button>`}
+      <button class="btn primary" id="ff-save">${editing ? "Save" : "Add"}</button></div>`);
+  setTimeout(() => s.querySelector("#ff-text").focus(), 250);
+  s.querySelector("#ff-save").onclick = async () => {
+    const text = s.querySelector("#ff-text").value.trim();
+    if (!text) return toast("Write the fact first", "err");
+    const confirmed = editing ? s.querySelector("#ff-conf").checked : undefined;
+    if (!await areYouSure(editing ? "Save changes to this Bee fact?" : "Add this fact to your Bee account?", esc(text), editing ? "Save" : "Add")) return;
+    try {
+      if (editing) await api(`/api/m/facts/${f.id}`, { method: "PATCH", body: { text: text !== f.text ? text : null, confirmed: confirmed !== f.confirmed ? confirmed : null } });
+      else await api("/api/m/facts", { body: { text } });
+      s.close(); toast(editing ? "Fact saved" : "Fact added"); loaders.profile(true);
+    } catch (e) { fail(e); }
+  };
+  s.querySelector("#ff-del")?.addEventListener("click", async () => {
+    if (!await areYouSure("Delete this Bee fact?", `${esc(f.text)}<br>This removes it from your Bee account.`, "Delete", true)) return;
+    try { await api(`/api/m/facts/${f.id}`, { method: "DELETE" }); s.close(); toast("Fact deleted"); loaders.profile(true); }
+    catch (e) { fail(e); }
+  });
+}
+
+function refreshCurrent() {
+  if (tab === "todos") loaders.todos();
+  else if (tab === "home") loaders.home();
+}
+
+// ---- search ----------------------------------------------------------------------------
+$("open-search").onclick = () => {
+  const p = page("Search", `<div class="searchbox"><input id="q" type="search" placeholder="Conversations, days, facts, to-dos, memory" autocomplete="off"></div>
+    <div id="results" style="margin-top:12px"><p class="small">Searches your Bee account (conversations, daily summaries, facts) plus your to-dos and the assistant's memory.</p></div>`);
+  const input = p.querySelector("#q"), out = p.querySelector("#results");
+  setTimeout(() => input.focus(), 250);
+  let timer, seq = 0;
+  input.oninput = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const q = input.value.trim(), mine = ++seq;
+      if (!q) { out.innerHTML = ""; return; }
+      out.innerHTML = `<div class="spinner"></div>`;
+      try {
+        const r = await api(`/api/m/search?q=${encodeURIComponent(q)}`);
+        if (mine !== seq) return;
+        const label = { conversation: "Conversation", daily: "Day", fact: "Bee fact" };
+        let html = "";
+        if (r.todos.length) html += `<h2 class="sec">To-dos</h2><div class="list">${r.todos.map(todoRow).join("")}</div>`;
+        if (r.bee.length) html += `<h2 class="sec">Bee</h2><div class="list">${r.bee.map((x) =>
+          `<div class="item ${x.type === "conversation" ? "tap" : ""}" data-sconv="${x.type === "conversation" ? x.id : ""}"><div class="txt">
+            <div class="row small"><span class="chip">${label[x.type] || esc(x.type)}</span><span>${x.created_at ? day(+x.created_at) : ""}</span></div>
+            <div style="margin-top:4px;font-weight:600" class="clamp2">${esc((x.title_snippet || "").replace(/[#*]/g, "").trim())}</div>
+            <div class="small clamp2">${esc((x.snippet || "").replace(/[#*]/g, "").trim())}</div></div></div>`).join("")}</div>`;
+        if (r.memory.length) html += `<h2 class="sec">Assistant memory</h2><div class="list">${r.memory.map((m) =>
+          `<div class="item"><div class="txt"><span class="chip">${esc(m.category)}</span> ${esc(m.text)}</div></div>`).join("")}</div>`;
+        out.innerHTML = html || `<div class="none">No results for “${esc(q)}”</div>`;
+        out.querySelectorAll("[data-sconv]").forEach((el) => { if (el.dataset.sconv) el.onclick = () => openConversation(el.dataset.sconv, q); });
+        out.querySelectorAll("[data-edit]").forEach((el) => el.onclick = () => todoForm(r.todos.find((t) => t.id == el.dataset.edit)));
+        out.querySelectorAll("[data-toggle]").forEach((el) => el.onclick = (e) => { e.stopPropagation(); toggleTodo(r.todos.find((t) => t.id == el.dataset.toggle)); });
+      } catch (e) { if (mine === seq) out.innerHTML = `<div class="none">Search failed.<br>${esc(e.message)}</div>`; }
+    }, 400);
+  };
+};
+
+// ---- chat (same job flow as index.html) -------------------------------------------------
+let state = null, busy = false;
+const msgs = $("msgs"), input = $("input"), send = $("send");
+const scrollDown = () => { msgs.scrollTop = msgs.scrollHeight; };
+
+function addMessage(role, html, cls = "") {
+  $("chat-empty")?.remove();
+  const el = document.createElement("div");
+  el.className = `msg ${role} ${cls}`;
+  el.innerHTML = `<div class="bubble">${html}</div><div class="meta"></div>`;
+  msgs.appendChild(el); scrollDown();
+  return el;
+}
+function setMeta(el, job) {
+  const parts = (job.recalled || []).map((r) => `<span class="chip accent">recalled · ${esc(r.topic)}</span>`)
+    .concat((job.tools || []).map((t) => `<span class="chip ${t.status === "success" ? "" : t.status === "declined" ? "warn" : "err"}">${esc(t.name)}${t.status === "declined" ? " · declined" : ""}</span>`));
+  el.querySelector(".meta").innerHTML = parts.join("");
+}
+async function follow(jobId, el) {
+  let approval = null;
+  while (true) {
+    await sleep(500);
+    let job;
+    try { job = await api(`/api/jobs/${jobId}`); } catch { continue; }
+    if (el) setMeta(el, job);
+    if (job.status === "confirm" && !approval) approval = showApproval(jobId, job.pending);
+    else if (job.status !== "confirm" && approval) { approval.close(); approval = null; }
+    if (job.status === "done" || job.status === "error") return job;
+  }
+}
+// The agent's own write tools still need Allow/Decline; on mobile it's a bottom sheet.
+function showApproval(jobId, pending) {
+  const s = sheet(`<h3>⚠️ Bee wants to run <code>${esc(pending?.tool || "a tool")}</code></h3>
+    <pre>${esc(JSON.stringify(pending?.args ?? {}, null, 2))}</pre>
+    <div class="actions"><button class="btn" data-a="0">Decline</button><button class="btn primary" data-a="1">Allow</button></div>`);
+  s.querySelectorAll("[data-a]").forEach((b) => b.onclick = async () => {
+    s.querySelectorAll("[data-a]").forEach((x) => x.disabled = true);
+    try { await api(`/api/jobs/${jobId}/confirm`, { body: { allow: b.dataset.a === "1" } }); s.close(); }
+    catch { s.querySelectorAll("[data-a]").forEach((x) => x.disabled = false); }
+  });
+  return s;
+}
+function updateControls() {
+  const ready = state?.status === "ready";
+  send.disabled = busy || !ready || !input.value.trim();
+  if ($("end")) $("end").disabled = busy || !ready;
+  input.disabled = !ready;
+  input.placeholder = ready ? "Message Bee…" : state?.status === "error" ? "Assistant unavailable" : "Assistant is loading…";
+}
+async function sendMessage(text) {
+  if (busy || !text.trim()) return;
+  addMessage("user", esc(text));
+  input.value = ""; autosize();
+  const el = addMessage("assistant", `<span class="typing"><span></span><span></span><span></span></span>`);
+  busy = true; updateControls();
+  try {
+    const start = await api("/api/chat", { body: { message: text } });
+    const job = await follow(start.id, el);
+    const bubble = el.querySelector(".bubble");
+    if (job.status === "error") { el.classList.add("error"); bubble.textContent = job.error; }
+    else if (job.off_topic) { el.classList.add("offtopic"); bubble.innerHTML = `${esc(job.reply)} — this assistant only handles your Bee data and memory.`; }
+    else bubble.innerHTML = md(job.reply || "(no reply)");
+  } catch (e) {
+    el.classList.add("error"); el.querySelector(".bubble").textContent = e.message;
+  } finally {
+    busy = false; updateControls(); refreshState(); scrollDown();
+    profileData = null; // the agent may have saved something to memory
+  }
+}
+async function endSession() {
+  if (busy) return;
+  if (!await areYouSure("Save & start a new session?", "This chat is saved to long-term memory and the conversation starts fresh.", "Save & restart")) return;
+  busy = true; updateControls();
+  const t = toast("Saving session…", "", [], 0);
+  try {
+    const start = await api("/api/session/end", { body: {} });
+    const job = await follow(start.id, null);
+    msgs.innerHTML = "";
+    const el = addMessage("assistant", job.status === "error"
+      ? esc("Session saved, but a new one could not start: " + job.error)
+      : "Session saved to long-term memory. Starting fresh — what would you like to know?");
+    if (job.status === "error") el.classList.add("error");
+    profileData = null;
+    delete $("view-convs").dataset.loaded;
+  } catch (e) { fail(e); }
+  finally { t.remove(); busy = false; updateControls(); refreshState(); }
+}
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; updateControls(); }
+input.addEventListener("input", autosize);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(input.value); }
+});
+$("composer").onsubmit = (e) => { e.preventDefault(); sendMessage(input.value); };
+document.querySelectorAll(".suggest button").forEach((b) => b.onclick = () => sendMessage(b.textContent));
+
+async function refreshState() {
+  try { state = await api("/api/state"); }
+  catch { state = { status: "error", error: "Can't reach the server. Is server.py running?" }; }
+  const st = busy || state.busy ? "busy" : state.status;
+  if ($("dot")) { $("dot").className = "dot " + st; $("dot").title = state.error || st; }
+  updateControls();
+}
+setInterval(() => { if (tab === "chat" && !busy) refreshState(); }, 3000);
+
+// ---- start ------------------------------------------------------------------------------
+show(EMBED ? new URLSearchParams(location.search).get("tab") || "home" : store.get("bee-mobile-tab", "home"));
+loadTodos().then(checkReminders).catch(() => {});
+</script>
+</body>
+</html>
