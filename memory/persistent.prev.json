@@ -1,0 +1,73 @@
+{
+  "updated_at": "2026-10-23T17:49:20",
+  "profile": {
+    "name": "Walter James Mitchell",
+    "preferred name": "Walt",
+    "age": "67",
+    "birthday": "2 August 1959",
+    "lives in": "San Mateo, California, in his own house in the Baywood neighborhood, with his wife",
+    "hometown": "Sacramento, California",
+    "former job": "Civil engineer with Caltrans for 35 years; worked on Bay Area bridge retrofits; retired in 2021",
+    "languages": "English",
+    "condition": "Early-stage Alzheimer's, diagnosed in 2025",
+    "caregiver": "Wife, Margaret",
+    "emergency contact": "Margaret, (650) 555-0142 (demo number)",
+    "deceased_policy": "gentle_redirect"
+  },
+  "preferences": [
+    "Likes to be called Walt",
+    "Prefers short, plain answers; likes a bit of dry humor",
+    "Drinks black coffee in the morning, decaf after noon",
+    "Loves 1960s and 70s music, especially The Beach Boys and Creedence Clearwater Revival",
+    "Feels calm talking about bridges, baseball and his woodworking projects",
+    "Big San Francisco Giants fan; listens to games on the radio",
+    "Dislikes being rushed and noisy restaurants",
+    "Gets restless in the late afternoon; a walk usually helps",
+    "Does not like being told he already asked something"
+  ],
+  "people": [
+    "Wife: Margaret (Maggie), 65, retired librarian, primary caregiver, married since 1984",
+    "Son: Daniel, 39, firefighter, lives in Redwood City with his family, visits on Sunday afternoons",
+    "Daughter-in-law: Priscilla, 37, dental hygienist",
+    "Grandson: Leo, 10, plays Little League; Walt never misses his Saturday games",
+    "Granddaughter: Maya, 6, loves feeding the ducks with him",
+    "Daughter: Emily, 36, high school teacher in Portland, Oregon; FaceTimes on Thursday evenings",
+    "Older brother: Frank, passed away in 2023 (caregiver says: gently redirect, do not repeat the news)",
+    "Best friend: Ray Alvarez, 69, former Caltrans colleague, plays chess with Walt on Tuesdays",
+    "Neighbor: Mr. Chen, 70, trades tomatoes and gardening tips over the fence",
+    "Church friend: Barbara, 68, drives him to the men's breakfast group on Fridays",
+    "Doctor: Dr. Patel, neurologist at Mills-Peninsula, check-up on the second Wednesday of each month",
+    "Dog: Buster, 8-year-old golden retriever"
+  ],
+  "routines": [
+    "Wakes at 6:30 and lets Buster out",
+    "Black coffee and the newspaper crossword at 7:00",
+    "Breakfast at 7:30, morning medicine with breakfast (Margaret gives it)",
+    "Walks Buster around Central Park in San Mateo at 9:00",
+    "Woodworking in the garage from 10:00 to noon",
+    "Lunch at 12:30, then a nap",
+    "Afternoon walk at 4:00 to Coyote Point or the Japanese Garden",
+    "Dinner at 6:00, evening medicine with dinner (Margaret gives it)",
+    "Tuesday: chess with Ray at 2:00",
+    "Thursday evening: FaceTime with Emily",
+    "Friday: men's breakfast group at church at 8:00",
+    "Saturday morning: Leo's Little League game",
+    "Sunday afternoon: Daniel's family visits"
+  ],
+  "facts": [
+    "Builds birdhouses and small wooden toys for his grandkids in the garage",
+    "Hobbies: woodworking, crossword puzzles, Giants baseball, chess, tomato gardening, walking Buster",
+    "Worked on the seismic retrofit of the San Mateo-Hayward Bridge and loves telling stories about it",
+    "Grows tomatoes and zucchini in the backyard",
+    "Served in the Army Corps of Engineers from 1977 to 1981",
+    "Married Margaret in 1984 in Sacramento",
+    "Moved to San Mateo in 1990",
+    "Favorite meal is Margaret's pot roast; favorite treat is a See's Candies peanut brittle",
+    "Proudest day: watching the Giants win the 2010 World Series with Daniel"
+  ],
+  "likes_to_know": [
+    "What did I do today?",
+    "Any to-dos from today?",
+    "What day is it?"
+  ]
+}
