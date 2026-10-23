@@ -1,7 +1,12 @@
 """
-Coding assistant enhanced with the AWS MCP server.
-Connects to the managed AWS MCP server via streamable HTTP
-to give the agent access to AWS capabilities.
+Bee, a warm and patient companion for a person living with memory loss.
+
+A Strands agent on Amazon Bedrock (Nova Micro) answers from the user's Bee data
+(the Bee MCP server over streamable HTTP, and the local copy of their
+conversations), its own three-tier memory (memory.py) and the care rules
+enforced by steering.py. Each message is screened locally first (topic_screen.py).
+
+    .venv/bin/python bee.py     # chat in the terminal; server.py serves the web app
 """
 import json
 import re
@@ -10,10 +15,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
 from mcp.client.streamable_http import streamablehttp_client
-from strands import Agent, AgentSkills, tool
+from strands import Agent, tool
 from strands.hooks import AfterModelCallEvent, AfterToolCallEvent, BeforeToolCallEvent, HookProvider, HookRegistry
 from strands.tools.mcp import MCPClient
-from strands.vended_tools import file_editor, shell
 
 from conversation_store import CONVERSATION_DIR, ConversationStore
 from memory import MEMORY_DIR, MemoryStore, TopicOffloadManager
@@ -21,23 +25,8 @@ from steering import BeeSteering, needs_care, states_fact
 from topic_screen import NOT_RELATED, THRESHOLD, TopicScreen, small_talk
 
 from strands.models import BedrockModel
-from strands.models.ollama import OllamaModel
 
-model = OllamaModel(
-    host="http://localhost:11434",
-    model_id="llama3.1",
-    temperature=0,
-    options={"num_ctx": 32768},  # default context is too small for tool schemas + results
-)
-
-bedrock_model = BedrockModel(
-        model_id="apac.amazon.nova-micro-v1:0",
-    )
-
-# Claude needs the Anthropic use-case form submitted in the Bedrock console first
-# bedrock_model = BedrockModel(
-#     model_id="global.anthropic.claude-haiku-4-5-20251001-v1:0",
-# )
+bedrock_model = BedrockModel(model_id="apac.amazon.nova-micro-v1:0")
 
 # Connect to the BEE MCP server (streamable HTTP). One client per session.
 # The token is the one passed to `bee mcp serve-http --token`; see README.md.
@@ -104,18 +93,6 @@ Tools and memory:
 - For offloaded topics mentioned earlier, use recall.
 - Never mention tools or errors. Say "Let me think" or "I can't see that right now."
 """
-# f"""You are a personal assistant with access to the user's Bee wearable data.
-# Today's date is {date.todayS().isoformat()}. Use YYYY-MM-DD dates when calling tools.
-# Use the Bee MCP tools (facts, daily summaries) to answer questions about the user's day.
-# Only call a tool when the question needs the user's Bee data. For greetings, small talk,
-# or questions about you, reply directly without calling any tool.
-# Your memory is the long-term memory at the start of this conversation plus the rest of it. Answer from it
-# directly; never call a Bee tool for something already in memory or said in this chat.
-# When the user tells you a lasting fact about themselves (name, preferences, people,
-# routines), call the remember tool to save it. If they correct something in your
-# long-term memory, call remember with replaces set to the old fact, copied exactly. If the user refers to something from
-# earlier that is listed as an offloaded topic, call the recall tool for the details.
-# Be concise and actionable."""
 
 def clean_reply(text: str) -> str:
     """Drop hidden reasoning, and any tool call the model wrote out as text
@@ -178,16 +155,14 @@ class ConfirmWrites(HookProvider):
     def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
         registry.add_callback(BeforeToolCallEvent, self.confirm)
 
-    def needs_confirmation(self, name: str, args: dict) -> bool:
-        if self.WRITE_TOOL.match(name) or name == "shell":
-            return True
-        return name == "file_editor" and args.get("command") != "view"
+    def needs_confirmation(self, name: str) -> bool:
+        return bool(self.WRITE_TOOL.match(name))
 
     def confirm(self, event: BeforeToolCallEvent) -> None:
         name, args = event.tool_use["name"], event.tool_use["input"]
-        if not self.needs_confirmation(name, args if isinstance(args, dict) else {}):
+        if not self.needs_confirmation(name):
             return
-        print(f"\n⚠️  The assistant wants to run {name} with:")
+        print(f"\n  The assistant wants to run {name} with:")
         print(json.dumps(args, indent=2, ensure_ascii=False))
         self.pending = {"tool": name, "args": args}
         try:
@@ -284,13 +259,13 @@ class BeeSession:
         self.confirm_writes = ConfirmWrites(confirm)
         self.agent = Agent(
             model=bedrock_model,
-            tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool(),
+            tools=[bee_mcp(), self.memory.remember_tool(), self.memory.recall_tool(),
                    *([conversations_tool(self.conversations)] if self.conversations else [])],
             system_prompt=base_prompt(),
             messages=self.memory.seed_messages(),
             conversation_manager=TopicOffloadManager(self.memory, max_exchanges=6, keep_exchanges=2),
             hooks=[CoerceToolArgs(), self.confirm_writes, self.logger, TokenUsagePrinter(self.logger)],
-            plugins=[AgentSkills(skills=["./skills"]), BeeSteering(self.memory, self.logger.write, CAREGIVER, CAREGIVER_PHONE)],
+            plugins=[BeeSteering(self.memory, self.logger.write, CAREGIVER, CAREGIVER_PHONE)],
         )
         self.last_reply = ""
         self.last_recalled: list[tuple[str, float]] = []  # (topic, P) preloaded for the last message
@@ -375,11 +350,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-# agent("Get me the highlights of my day and summarize them in a few sentences.")
-
-# agent("Get any to-do items from my day and summarize them in a few sentences.")
-
-# agent("Get any health data from my day and summarize them in a few sentences.") 
-
-# agent("Get any media consumed from my day and summarize them in a few sentences.")

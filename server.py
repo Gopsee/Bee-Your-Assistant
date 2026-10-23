@@ -146,7 +146,7 @@ class BeeApp:
             self.session.agent.hooks.add_hook(JobRecorder(self))
             print(f"Logging conversation to {self.session.logger.path}")
             self.status, self.error = "ready", ""
-        except Exception as exc:  # e.g. Ollama or the Bee MCP server not running
+        except Exception as exc:  # e.g. Bedrock unreachable or the Bee MCP server not running
             self.session = None
             self.status, self.error = "error", f"{type(exc).__name__}: {exc}"
 

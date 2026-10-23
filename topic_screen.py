@@ -90,6 +90,3 @@ class TopicScreen:
         answers = self.engine.ask(state, questions).answers
         scored = sorted(((n, answers[f"topic_{i}"].noul) for i, n in enumerate(names)), key=lambda x: -x[1])
         return [(n, p) for n, p in scored if p >= RECALL_THRESHOLD][:MAX_RECALLED]
-
-    def is_related(self, message: str, previous_reply: str = "", user_memory: str = "") -> bool:
-        return self.p_on_topic(message, previous_reply, user_memory) >= THRESHOLD
