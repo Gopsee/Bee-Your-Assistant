@@ -112,7 +112,7 @@ _TOOL_TALK = re.compile(
 _GREETING_WORDS = {"hi", "hello", "hey", "good", "morning", "afternoon", "evening", "night", "thanks", "thank",
                    "you", "ok", "okay", "bye", "goodbye", "how", "are", "bee", "there", "dear", "nice", "see"}
 # Tools that run in Bee itself; every other tool reads the user's Bee account.
-LOCAL_TOOLS = {"remember", "recall", "file_editor", "shell"}
+LOCAL_TOOLS = {"remember", "recall"}
 
 
 def is_greeting(text: str) -> bool:
