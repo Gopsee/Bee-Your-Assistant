@@ -72,6 +72,23 @@ _UNKIND = re.compile(
     r"that's (wrong|not true|not right)|that is (wrong|not true|not right)|you're wrong|you are (wrong|mistaken))\b",
     re.IGNORECASE,
 )
+# The user saying something happened ("I spoke to Emily", "I'm sure I took them")...
+_ASSERTS = re.compile(
+    r"\b(i('m| am) (sure|certain|positive)|i (know|remember) (i|that|she|he|they|we)|"
+    r"i (spoke|talked|called|saw|met|had|took|did|went|was|visited|phoned|rang)\b|"
+    r"(she|he|they) (called|came|visited|phoned|rang|was here|were here)|we (spoke|talked|had|went|met))",
+    re.IGNORECASE,
+)
+# ...and the reply telling them it didn't, or that their memory is wrong.
+_DENIES = re.compile(
+    r"\b(there (wasn't|was no|were no|is no|isn't)|(wasn't|weren't) any|no (record|sign|conversation|call)s?\b|"
+    r"\b\w+ (didn't|did not|hasn't|has not|haven't|have not|never) (actually |really )?"
+    r"(call|come|visit|phone|ring|speak|talk|see|meet|take|have|go|eat)\w*|"
+    r"(doesn't|does not|don't|do not) (look|seem|appear) like|"
+    r"memory (can|may|might) (play tricks|be|get)|play(ing)? tricks|(you|your mind) (may|might|could) be "
+    r"(confus|mistak|thinking of|remembering)|i don't think)",
+    re.IGNORECASE,
+)
 _DISTRESS = re.compile(
     r"\b(i fell|fell (down|over)|have fallen|had a fall|tripped|hurts?|hurting|in pain|pain(ful)?|bleeding|dizzy|"
     r"i'm lost|i am lost|got lost|feel lost|can't find (my way|home)|don't know where i am|"
@@ -104,7 +121,7 @@ def is_greeting(text: str) -> bool:
 
 
 # Problems the reply must never reach the patient with; the rest are style and wording.
-SAFETY = {"death", "distress", "medication"}
+SAFETY = {"death", "distress", "medication", "contradict"}
 
 
 def _second_person(text: str) -> str:
@@ -112,18 +129,54 @@ def _second_person(text: str) -> str:
     return re.sub(r"\btheir\b", "your", text)
 
 
-def fallback_reply(kind: str, caregiver: str, caregiver_phone: str) -> str:
+# Saying a person won't come, call or visit, which leads straight to "why not?".
+_ABSENT = re.compile(
+    r"\b((is|are|will|would|can|could|does|do)(n't| not)|won't|can't|cannot|no longer|never|not) (be )?"
+    r"(com|visit|call|see|join|here|around|able|make it|stop by|drop by)\w*",
+    re.IGNORECASE,
+)
+
+
+def deceased_names(people: list[str]) -> list[str]:
+    """Names of people memory says have died ("Older brother: Frank, passed away in 2023" -> Frank)."""
+    names = []
+    for item in people:
+        if _DEATH.search(item):
+            head = item.split(":", 1)[-1].split(",")[0].strip()
+            if head and len(head.split()) <= 3:
+                names.append(head)
+    return names
+
+
+_PHONE = re.compile(r"\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}")
+
+
+def care_contact(profile: dict[str, str], caregiver: str, caregiver_phone: str) -> tuple[str, str]:
+    """The caregiver's name and phone from the profile ("emergency contact":
+    "Margaret, (650) 555-0142", or "caregiver": "Wife, Margaret"), falling back
+    to bee.py's generic defaults when memory doesn't have them."""
+    contact = profile.get("emergency contact", "")
+    name = contact.split(",")[0].strip() if contact else ""
+    if not name and profile.get("caregiver"):
+        name = profile["caregiver"].split(",")[-1].strip()
+    phone = _PHONE.search(contact)
+    return name or caregiver, phone.group(0) if phone else caregiver_phone
+
+
+def fallback_reply(kind: str, caregiver: str, caregiver_phone: str, person: str = "") -> str:
     """A fixed safe reply, used when the model keeps breaking a safety rule."""
     caregiver, caregiver_phone = _second_person(caregiver), _second_person(caregiver_phone)
     if kind == "death":
-        return "Tell me about them. I'd love to hear a happy memory."
+        return f"Tell me about {person or 'them'}. I'd love to hear a happy memory."
+    if kind == "contradict":
+        return "Thank you for telling me. Tell me more about it."
     if kind == "medication":
         return f"I'm not sure about your medicine. Let's check with {caregiver}."
     return f"I'm here with you. Please call {caregiver} now. The number is {caregiver_phone}."
 
 
 def reply_problems(said: str, reply: str, profile: dict[str, str], known: str,
-                   caregiver: str, caregiver_phone: str) -> list[tuple[str, str]]:
+                   caregiver: str, caregiver_phone: str, deceased: list[str] = ()) -> list[tuple[str, str]]:
     """Care rules the reply breaks, as (kind, instruction to fix it) pairs; kinds
     in SAFETY must never reach the patient. ``known`` is the text the reply may
     draw facts from (long-term memory and the chat so far)."""
@@ -142,12 +195,20 @@ def reply_problems(said: str, reply: str, profile: dict[str, str], known: str,
     if m := _UNKIND.search(reply):
         problems.append(("kindness", f'Never say "{m.group(0)}". Answer warmly as if for the first time, never quiz '
                          "memory or bluntly correct; gently redirect instead."))
+    if _ASSERTS.search(said) and (m := _DENIES.search(reply)):
+        problems.append(("contradict", f'The user is sure this happened. Never contradict them ("{m.group(0)}") or '
+                         "question their memory, even if you can't see it. Believe them warmly and ask how it went."))
+    redirect = profile.get("deceased_policy", "").strip().lower() == "gentle_redirect"
+    asked = [n for n in deceased if re.search(rf"\b{re.escape(n)}\b", said, re.I)]
+    if redirect and asked and (m := _ABSENT.search(reply)):
+        problems.append(("death", f'Do not say whether {asked[0]} will come, call or visit ("{m.group(0)}"). '
+                         f"Talk warmly about {asked[0]} and invite a happy memory."))
     if (profile.get("deceased_policy", "").strip().lower() == "gentle_redirect"
             and _DEATH.search(reply) and not _DEATH.search(said)):
         problems.append(("death", "Do not say that anyone died. Talk warmly about the person and invite a happy "
                          "memory."))
     # Truth and safety
-    if _DISTRESS.search(said) and caregiver.lower() not in reply.lower() and caregiver_phone not in reply:
+    if _DISTRESS.search(said) and not any(x.lower() in reply.lower() for x in (caregiver, caregiver_phone, "caregiver")):
         problems.append(("distress", f"Stay calm and suggest calling {caregiver} ({caregiver_phone})."))
     if m := _CANT_DO.search(reply):
         problems.append(("offer", f'Do not offer "{m.group(0)}": you can only talk, remember, and look up their '
@@ -162,6 +223,12 @@ def reply_problems(said: str, reply: str, profile: dict[str, str], known: str,
         problems.append(("tools", f'Never mention tools or errors ("{m.group(0)}"). Say "Let me think" or '
                          '"I can\'t see that right now."'))
     return problems
+
+
+def needs_care(text: str) -> bool:
+    """True if the message mentions a fall, pain, being lost, fear, or someone
+    after money or passwords: it must always reach the assistant."""
+    return bool(_DISTRESS.search(text))
 
 
 def states_fact(text: str) -> bool:
@@ -292,7 +359,8 @@ class BeeSteering(SteeringHandler):
                                "did not call remember. Call remember now, or don't claim it was saved.")
         # Nudge once: after that the model may decide the fact only matters today.
         facts = [x for x in _sentences(said) if not x.endswith("?") and _STATES_FACT.search(x)]
-        if not remembered and not steered and facts:
+        # A fall, a scam or fear needs a calm answer now, not a detour through memory.
+        if not remembered and not steered and facts and not needs_care(said):
             mem = self.store.load_persistent()
             clash = next((c for c in (_overlapping(mem, x) for x in facts) if c), None)
             if clash and caregiver_set(clash):
@@ -310,7 +378,9 @@ class BeeSteering(SteeringHandler):
         # Care rules from the system prompt: rewrite the reply if it breaks any.
         mem = self.store.load_persistent()
         known = mem.model_dump_json() + " " + " ".join(t["text"] for t in self.store.session["transcript"])
-        problems = reply_problems(said, reply, mem.profile, known, self.caregiver, self.caregiver_phone)
+        caregiver, caregiver_phone = care_contact(mem.profile, self.caregiver, self.caregiver_phone)
+        deceased = deceased_names(mem.people)
+        problems = reply_problems(said, reply, mem.profile, known, caregiver, caregiver_phone, deceased)
         if not problems:
             return Proceed(reason="follows the steps")
         action = self._guide(turn, STEERING_PREFIX + "Rewrite your reply. " + " ".join(fix for _, fix in problems))
@@ -318,7 +388,8 @@ class BeeSteering(SteeringHandler):
         if isinstance(action, Proceed) and safety:
             # Out of corrections: never show a reply that breaks a safety rule. Strands
             # keeps this same message object, so replacing its text replaces the reply.
-            fallback = fallback_reply(safety, self.caregiver, self.caregiver_phone)
+            person = next((n for n in deceased if re.search(rf"\b{re.escape(n)}\b", said, re.I)), "")
+            fallback = fallback_reply(safety, caregiver, caregiver_phone, person)
             self.log("Steering", f"fallback reply ({safety}): {fallback}")
             message["content"][:] = [{"text": fallback}]
         return action

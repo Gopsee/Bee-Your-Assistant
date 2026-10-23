@@ -20,6 +20,7 @@ CONVERSATION_DIR = Path(__file__).parent / "bee_conversation"
 SYNC_EVERY = 60          # seconds between syncs unless forced
 CLI_TIMEOUT = 60
 TRANSCRIPT_CHARS = 4000  # per conversation handed to the model
+INDEX_SUMMARY_CHARS = 700  # of each conversation's summary in the per-turn list
 
 
 def bee(*args):
@@ -122,7 +123,9 @@ class ConversationStore:
         return sorted(self.dir.glob(f"{day.isoformat()}_*.md"))
 
     def day_index(self, day: date) -> str:
-        """One line per conversation on that day, for the opening message."""
+        """Each conversation on that day with its summary, for the opening message.
+        The title alone is too vague ("Family Care During Memory Decline" for a
+        call from Daniel), and a small model rarely calls a tool to look further."""
         lines = []
         for path in self.files_on(day):
             text = path.read_text(encoding="utf-8")
@@ -131,6 +134,12 @@ class ConversationStore:
             what = m.group(1) if m else "no summary yet"
             live = "" if _field(text, "State") == "COMPLETED" else " (still being recorded)"
             lines.append(f"- {start}{'-' + end if end else ''}: {what}{live}")
+            m = re.search(r"^#+ Summary\s*\n(.*?)(?=^#|\Z)", text, re.M | re.S)
+            if m and m.group(1).strip():
+                summary = " ".join(m.group(1).split())
+                if len(summary) > INDEX_SUMMARY_CHARS:
+                    summary = summary[:INDEX_SUMMARY_CHARS].rsplit(" ", 1)[0] + " ..."
+                lines.append(f"  {summary}")
         return "\n".join(lines)
 
     def read(self, day: date, person: str = "") -> str:

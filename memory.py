@@ -80,6 +80,17 @@ _FRAMING = {w[:5] for w in ("interested", "prefers", "lives", "near", "moving", 
                              "loves", "dislikes", "hates", "staying", "favourite", "favorite")}
 
 
+SCREEN_PROFILE_KEYS = ("name", "preferred name", "lives in", "former job", "job", "condition")
+GIST_WORDS = 8
+
+
+def _gist(item: str) -> str:
+    """The start of a memory item, for the topic screen: up to the first
+    parenthesis or semicolon, at most GIST_WORDS words."""
+    head = re.split(r"[(;]", item, maxsplit=1)[0]
+    return " ".join(head.split()[:GIST_WORDS]).rstrip(",")
+
+
 def _mentions(message: str, item: str) -> bool:
     """True if ``message`` names the subject of a memory item: at least two of the
     item's subject words (or its only one), so "notebook" alone doesn't match
@@ -522,11 +533,16 @@ class MemoryStore:
         return any(_mentions(message, item) for item in items)
 
     def screen_context(self) -> str:
-        """Persistent memory plus this session's notes, for the topic screen."""
-        notes = [f"  - {n['note']}" for n in getattr(self, "session", {}).get("notes", [])]
-        if not notes:
-            return self.persistent_prompt()
-        return self.persistent_prompt() + "\nNoted this session:\n" + "\n".join(notes)
+        """A short gist of persistent memory plus this session's notes, for the topic
+        screen. The screen runs on the CPU and its time grows with its input, and a
+        message that names a memory item skips it anyway (mentions_memory), so the
+        screen only needs who the user is and what they care about, not the details."""
+        mem = self.load_persistent()
+        notes = [n["note"] for n in getattr(self, "session", {}).get("notes", [])]
+        lines = [f"{k}: {_gist(str(v))}" for k, v in mem.profile.items() if k in SCREEN_PROFILE_KEYS]
+        lines += [_gist(item) for c in CATEGORIES[1:] for item in getattr(mem, c)]
+        lines += [_gist(note) for note in notes]
+        return "About the user:\n" + "\n".join(f"- {line}" for line in lines) if lines else ""
 
     def topic_index_prompt(self) -> str:
         """One line per offloaded topic, so the model knows what it can recall."""

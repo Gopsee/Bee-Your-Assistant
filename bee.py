@@ -17,8 +17,8 @@ from strands.vended_tools import file_editor, shell
 
 from conversation_store import CONVERSATION_DIR, ConversationStore
 from memory import MEMORY_DIR, MemoryStore, TopicOffloadManager
-from steering import BeeSteering, states_fact
-from topic_screen import NOT_RELATED, THRESHOLD, TopicScreen
+from steering import BeeSteering, needs_care, states_fact
+from topic_screen import NOT_RELATED, THRESHOLD, TopicScreen, small_talk
 
 from strands.models import BedrockModel
 from strands.models.ollama import OllamaModel
@@ -70,7 +70,8 @@ def base_prompt(name: str = PATIENT_NAME, caregiver: str = CAREGIVER, caregiver_
 Today is {now:%A, %d %B %Y}; it is {time_of_day(now.hour)}. Use YYYY-MM-DD dates when calling tools.
 
 How to speak:
-- Short, simple sentences. One idea at a time. One question at a time.
+- Short, simple sentences. One idea at a time.
+- Ask at most ONE question per reply (one question mark), or none. Even after a greeting.
 - Use people's names and relationships ("your son" plus his name), not pronouns.
 - Plain text only; no lists longer than three items, no headings or tables.
 - End with the single most important point, restated simply.
@@ -80,7 +81,8 @@ Kindness rules (most important):
 - Never quiz or test memory. Never argue or bluntly correct. Gently redirect instead.
 - Acknowledge feelings before facts. If {name} seems anxious, offer a comfort topic from memory.
 - If memory has deceased_policy: gentle_redirect and {name} asks about someone who has died, do not say
-  they died. Talk warmly about the person and invite a happy memory ("Tell me about your brother").
+  they died, and do not say whether they will come, call or visit. Talk warmly about the person and invite a
+  happy memory ("Tell me about your brother").
 
 Truth and safety:
 - Never invent memories, events, or medication details. If unsure, say so and suggest asking {caregiver}.
@@ -298,6 +300,13 @@ class BeeSession:
         if self.memory.mentions_memory(user_input):
             self.logger.write("Screen", "matches memory, skipped")
             return True
+        # Safety first: a fall, being lost, or a scam is never off topic.
+        if needs_care(user_input):
+            self.logger.write("Screen", "safety concern, skipped")
+            return True
+        if small_talk(user_input):
+            self.logger.write("Screen", "small talk, skipped")
+            return True
         # The user telling us about themselves is always on topic: it may need remembering.
         if states_fact(user_input):
             self.logger.write("Screen", "statement about the user, skipped")
@@ -320,7 +329,9 @@ class BeeSession:
         if self.conversations:
             self.logger.write("Conversations", self.conversations.sync())
             today = self.conversations.day_index(date.today()) or "- none saved yet"
-            self.agent.messages[0]["content"][0]["text"] += f"\n\nToday's recorded conversations:\n{today}"
+            self.agent.messages[0]["content"][0]["text"] += (
+                "\n\nToday's recorded conversations. I took part in all of them; the summaries may call me "
+                f"\"the man\", \"the father\" or \"the husband\". Answer questions about my day from these:\n{today}")
 
     def ask(self, user_input: str) -> str:
         """Handle one customer message and return the reply."""
