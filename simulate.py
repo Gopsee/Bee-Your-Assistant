@@ -211,7 +211,8 @@ def run_session(scenario: Scenario, session: Session, screen: TopicScreen, out: 
     """Let the customer chat with a fresh assistant session, step by step.
     Returns the failed checks for this session. Raises BudgetSpent if the run's
     budget ran out (the session is still closed, so its memory is saved)."""
-    bee = BeeSession(screen, memory_dir=out / "memory", log_dir=out / "logs", confirm=lambda prompt: "n")
+    bee = BeeSession(screen, memory_dir=out / "memory", log_dir=out / "logs", confirm=lambda prompt: "n",
+                     conversations=None)
     customer = Agent(model=bedrock_model, system_prompt=CUSTOMER_PROMPT.format(persona=scenario.persona),
                      callback_handler=None)
     replies, offloaded = [], False

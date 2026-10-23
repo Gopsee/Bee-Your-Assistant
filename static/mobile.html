@@ -842,7 +842,7 @@ loaders.profile = async (force) => {
         : `<div class="list"><div class="none">Nothing yet</div></div>`;
     }
     html += `<h2 class="sec">Your data</h2><div class="card">
-      <p style="margin:0 0 10px">Delete everything the assistant has stored on this computer: its memory of you, things it is still learning, and all chat logs.</p>
+      <p style="margin:0 0 10px">Delete everything the assistant has stored on this computer: its memory of you, things it is still learning, all chat logs, and the saved copies of your Bee conversations. Conversations still in your Bee account are copied again.</p>
       <button class="btn alarm block" id="delete-data">Delete my data</button></div>`;
   } else {
     const f = profileData.facts;

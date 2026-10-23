@@ -5,6 +5,13 @@ BeeSession (bee.py) behind a small JSON API.
     python server.py                       # http://127.0.0.1:8000
     python server.py --port 9000
     python server.py --memory-dir /tmp/scratch-memory --log-dir /tmp/scratch-logs
+    BEE_PASSWORD=... python server.py --host 0.0.0.0   # reachable from other devices
+
+Off localhost the server needs a password (BEE_PASSWORD): the browser asks for
+it once (HTTP Basic auth, any user name). Without one it refuses to start.
+
+Every few minutes the server copies new Bee conversations, with transcripts,
+to bee_conversation/ (conversation_store.py); the assistant answers from them.
 
 The mobile page (static/mobile.html, at /mobile) uses the /api/m/... routes:
 Bee account data through the bee CLI (bee_data.py), plus edits to persistent
@@ -15,6 +22,9 @@ runs on one worker thread. A chat message becomes a job the page polls; when a
 write tool needs approval the job waits until the page answers Allow/Decline.
 """
 import argparse
+import base64
+import os
+import secrets
 import shutil
 import threading
 import uuid
@@ -25,13 +35,14 @@ from pathlib import Path
 from typing import Literal
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from strands.hooks import AfterModelCallEvent, AfterToolCallEvent, HookProvider, HookRegistry
 
 from bee import CAREGIVER, CAREGIVER_PHONE, LOG_DIR, BeeSession, bedrock_model
 from bee_data import BeeData, BeeError
+from conversation_store import CONVERSATION_DIR, ConversationStore
 from likes_to_know import answers_for
 from memory import (CATEGORIES, MEMORY_DIR, PROMOTE_AFTER, QUESTION_PROMOTE_AFTER, QUESTION_WINDOW_DAYS, Memory,
                     _read_json, _write_json, load_intermediate, load_questions, settle_card)
@@ -39,6 +50,20 @@ from topic_screen import NOT_RELATED, TopicScreen
 
 STATIC_DIR = Path(__file__).parent / "static"
 CONFIRM_TIMEOUT = 600  # seconds to wait for Allow/Decline before declining
+SYNC_INTERVAL = 300    # seconds between background copies of Bee conversations
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def password_ok(header: str, password: str) -> bool:
+    """Check an HTTP Basic Authorization header; the user name is ignored."""
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic":
+        return False
+    try:
+        given = base64.b64decode(encoded).decode().partition(":")[2]
+    except ValueError:
+        return False
+    return secrets.compare_digest(given.encode(), password.encode())
 
 
 class Job:
@@ -81,8 +106,10 @@ class JobRecorder(HookProvider):
 
 
 class BeeApp:
-    def __init__(self, memory_dir: Path, log_dir: Path) -> None:
+    def __init__(self, memory_dir: Path, log_dir: Path, conversation_dir: Path = CONVERSATION_DIR) -> None:
         self.memory_dir, self.log_dir = memory_dir, log_dir
+        self.conversations = ConversationStore(conversation_dir)
+        self.stopping = threading.Event()
         self.worker = ThreadPoolExecutor(max_workers=1)
         self.jobs: dict[str, Job] = {}
         self.current: Job | None = None
@@ -114,7 +141,8 @@ class BeeApp:
                 print("Loading topic screen (strands-decider)...")
                 self.screen = TopicScreen()
             with self.memory_lock:  # start_session merges a session left over from a crash
-                self.session = BeeSession(self.screen, self.memory_dir, self.log_dir, confirm=self._confirm)
+                self.session = BeeSession(self.screen, self.memory_dir, self.log_dir, confirm=self._confirm,
+                                          conversations=self.conversations)
             self.session.agent.hooks.add_hook(JobRecorder(self))
             print(f"Logging conversation to {self.session.logger.path}")
             self.status, self.error = "ready", ""
@@ -160,12 +188,14 @@ class BeeApp:
             with self.memory_lock:
                 memory_files = [p for p in self.memory_dir.glob("*.json") if p.is_file()]
                 logs = [p for p in self.log_dir.glob("*.log") if p.is_file()]
-                for path in memory_files + logs:
+                copies = list(self.conversations.dir.glob("*.md"))
+                for path in memory_files + logs + copies:
                     path.unlink()
             # Finished jobs still hold old replies in server memory.
             self.jobs = {k: j for k, j in self.jobs.items() if j.status not in ("done", "error")}
             self._start_session()
-            job.reply = f"Deleted {len(memory_files)} memory files and {len(logs)} conversation logs."
+            job.reply = (f"Deleted {len(memory_files)} memory files, {len(logs)} conversation logs "
+                         f"and {len(copies)} saved Bee transcripts.")
             job.status = "done" if self.status == "ready" else "error"
             job.error = self.error
         except Exception as exc:
@@ -198,7 +228,14 @@ class BeeApp:
             "log": str(self.session.logger.path) if self.session else None,
         }
 
+    def sync_loop(self) -> None:
+        """Keep the local copy of Bee conversations current while the server runs."""
+        while not self.stopping.is_set():
+            print(f"Bee conversations: {self.conversations.sync(force=True)}")
+            self.stopping.wait(SYNC_INTERVAL)
+
     def shutdown(self) -> None:
+        self.stopping.set()
         for job in self.jobs.values():  # unblock a job waiting for Allow/Decline
             job.answer = "n"
             job.answered.set()
@@ -292,16 +329,26 @@ class MemoryEditIn(BaseModel):
     value: str = ""
 
 
-def create_app(memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR) -> FastAPI:
-    bee = BeeApp(memory_dir, log_dir)
+def create_app(memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR,
+               conversation_dir: Path = CONVERSATION_DIR, password: str = "") -> FastAPI:
+    bee = BeeApp(memory_dir, log_dir, conversation_dir)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         bee.worker.submit(bee._start_session)
+        threading.Thread(target=bee.sync_loop, daemon=True).start()
         yield
         bee.shutdown()
 
     app = FastAPI(title="Bee Assistant", lifespan=lifespan)
+
+    if password:
+        @app.middleware("http")
+        async def require_password(request: Request, call_next):
+            if password_ok(request.headers.get("authorization", ""), password):
+                return await call_next(request)
+            return Response("Password required", status_code=401,
+                            headers={"WWW-Authenticate": 'Basic realm="Bee Assistant"'})
 
     @app.get("/")
     def index():
@@ -342,7 +389,7 @@ def create_app(memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR) -> FastAP
 
     @app.post("/api/data/delete")
     def delete_data():
-        """Delete all local memory and conversation logs (not the Bee account's data)."""
+        """Delete all local memory, conversation logs and saved Bee transcripts (not the Bee account's data)."""
         return bee.submit(bee._delete_data).view()
 
     @app.post("/api/retry")
@@ -471,8 +518,15 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--memory-dir", type=Path, default=MEMORY_DIR)
     parser.add_argument("--log-dir", type=Path, default=LOG_DIR)
+    parser.add_argument("--conversation-dir", type=Path, default=CONVERSATION_DIR)
     args = parser.parse_args()
-    uvicorn.run(create_app(args.memory_dir, args.log_dir), host=args.host, port=args.port)
+    if not os.environ.get("BEE_MCP_TOKEN"):
+        parser.error("set BEE_MCP_TOKEN to the token the Bee MCP server was started with (see README.md)")
+    password = os.environ.get("BEE_PASSWORD", "")
+    if args.host not in LOCAL_HOSTS and not password:
+        parser.error(f"--host {args.host} makes the app reachable from other devices; set BEE_PASSWORD first")
+    uvicorn.run(create_app(args.memory_dir, args.log_dir, args.conversation_dir, password),
+                host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

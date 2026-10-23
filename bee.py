@@ -15,6 +15,7 @@ from strands.hooks import AfterModelCallEvent, AfterToolCallEvent, BeforeToolCal
 from strands.tools.mcp import MCPClient
 from strands.vended_tools import file_editor, shell
 
+from conversation_store import CONVERSATION_DIR, ConversationStore
 from memory import MEMORY_DIR, MemoryStore, TopicOffloadManager
 from steering import BeeSteering, states_fact
 from topic_screen import NOT_RELATED, THRESHOLD, TopicScreen
@@ -39,12 +40,16 @@ bedrock_model = BedrockModel(
 # )
 
 # Connect to the BEE MCP server (streamable HTTP). One client per session.
+# The token is the one passed to `bee mcp serve-http --token`; see README.md.
+BEE_MCP_URL = os.environ.get("BEE_MCP_URL", "http://127.0.0.1:8790/mcp")
+
+
 def bee_mcp() -> MCPClient:
+    token = os.environ.get("BEE_MCP_TOKEN")
+    if not token:
+        raise RuntimeError("Set BEE_MCP_TOKEN to the token the Bee MCP server was started with (see README.md)")
     return MCPClient(
-        lambda: streamablehttp_client(
-            "http://127.0.0.1:8790/mcp",
-            headers={"Authorization": "Bearer ffdae896e3d93be3d47ca6342a4b8c08cb47e810e6b6760b0dac496a65b22ac6"},
-        )
+        lambda: streamablehttp_client(BEE_MCP_URL, headers={"Authorization": f"Bearer {token}"})
     )
 
 # Who the agent is caring for. Fill these in for the real patient; the defaults
@@ -85,7 +90,11 @@ Truth and safety:
   make calls, or send messages, so never offer to.
 
 Tools and memory:
-- Use Bee tools only when the question needs {name}'s day (what happened, who they talked to).
+- Today's recorded conversations are listed at the start of this chat, updated every message. For who
+  {name} talked to or what was said, use that list; call conversations for the details or another day.
+- If a conversation is not there, say you can't see it yet (Bee may still be saving it). Never say
+  something did not happen. If {name} is sure it did, believe them warmly and ask how it went.
+- Use other Bee tools only when the question needs more of {name}'s day.
   Answer greetings and anything already in memory or this chat directly.
 - Save lasting facts with remember: people, routines, comfort topics, things that upset {name}.
   Facts set by a caregiver take priority; don't overwrite them from the patient's statements.
@@ -236,13 +245,36 @@ class TokenUsagePrinter(HookProvider):
         self.logger.write("Model", line)
 
 
+def conversations_tool(store: ConversationStore):
+    @tool
+    def conversations(day: str = "", person: str = "") -> str:
+        """Read the saved Bee conversations for a day: summaries and who said what.
+        Use it for who the user talked to, what was said, or a past day.
+
+        Args:
+            day: Date as YYYY-MM-DD; leave empty for today.
+            person: Only conversations mentioning this name; leave empty for all.
+        """
+        try:
+            when = date.fromisoformat(day) if day else date.today()
+        except ValueError:
+            return f"'{day}' is not a YYYY-MM-DD date."
+        store.sync()
+        return store.read(when, person)
+
+    return conversations
+
+
 class BeeSession:
     """One chat session: topic screen, agent and memory. Used by the interactive
     loop below and by simulate.py, which points it at scratch memory."""
 
     def __init__(self, screen: TopicScreen, memory_dir: Path = MEMORY_DIR, log_dir: Path = LOG_DIR,
-                 confirm: Callable[[str], str] = input) -> None:
+                 confirm: Callable[[str], str] = input,
+                 conversations: "ConversationStore | Path | None" = CONVERSATION_DIR) -> None:
         self.screen = screen
+        # Local copy of the Bee conversations (None: no access, e.g. simulations).
+        self.conversations = ConversationStore(conversations) if isinstance(conversations, Path) else conversations
         self.logger = ConversationLogger(log_dir)
         # Session memory (this run) + persistent memory (across runs); see memory.py.
         self.memory = MemoryStore(bedrock_model, memory_dir)
@@ -250,7 +282,8 @@ class BeeSession:
         self.confirm_writes = ConfirmWrites(confirm)
         self.agent = Agent(
             model=bedrock_model,
-            tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool()],
+            tools=[bee_mcp(), file_editor, shell, self.memory.remember_tool(), self.memory.recall_tool(),
+                   *([conversations_tool(self.conversations)] if self.conversations else [])],
             system_prompt=base_prompt(),
             messages=self.memory.seed_messages(),
             conversation_manager=TopicOffloadManager(self.memory, max_exchanges=6, keep_exchanges=2),
@@ -284,6 +317,10 @@ class BeeSession:
             self.logger.write("Recall", ", ".join(f"{n} ({p:.2f})" for n, p in picked) or "no topic needed")
         # agent.messages[:2] is always the seed pair (TopicOffloadManager.PINNED).
         self.agent.messages[:2] = self.memory.seed_messages([n for n, _ in picked])
+        if self.conversations:
+            self.logger.write("Conversations", self.conversations.sync())
+            today = self.conversations.day_index(date.today()) or "- none saved yet"
+            self.agent.messages[0]["content"][0]["text"] += f"\n\nToday's recorded conversations:\n{today}"
 
     def ask(self, user_input: str) -> str:
         """Handle one customer message and return the reply."""
