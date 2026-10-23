@@ -1,0 +1,19 @@
+# Bee, your Assistant (Python 3.12)
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# Also needed outside pip: the Bee CLI (`bee`, logged in with `bee login`) and
+# AWS credentials with Amazon Bedrock access (Nova Micro).
+
+# Agent: Strands on Amazon Bedrock, Bee MCP client, steering plugin
+strands-agents==1.60.0
+boto3==1.43.112
+mcp==1.30.0
+
+# Local topic screen (strands-decider 2B on the CPU); pulls in torch and transformers
+strands-decider==0.1.0
+torch==2.14.1
+transformers==5.20.1
+
+# Web app
+fastapi==0.143.3
+uvicorn==0.54.0
+pydantic==2.14.1
